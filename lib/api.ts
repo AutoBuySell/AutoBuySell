@@ -28,6 +28,14 @@ export interface Position {
   unrealized_plpc: number;
 }
 
+export interface PortfolioHistory {
+    timestamp: number[];
+    equity: number[];
+    profit_loss: number[];
+    profit_loss_pct: number[];
+    timeframe: string;
+}
+
 export interface SymbolInfo {
     ticker: string;
     name: string;
@@ -93,6 +101,12 @@ export const tradingApi = {
     const { data } = await apiClient.get<Position[]>('/trading/positions');
     return data;
   },
+  getHistory: async (period: string = '1M', timeframe: string = '1D') => {
+    const { data } = await apiClient.get<PortfolioHistory>('/trading/history', { 
+        params: { period, timeframe } 
+    });
+    return data;
+  },
   getStatus: async () => {
       const { data } = await apiClient.get('/trading/status');
       return data;
@@ -106,17 +120,23 @@ export const tradingApi = {
 };
 
 export const dataApi = {
-    getSymbols: async () => {
-        const { data } = await apiClient.get<SymbolInfo[]>('/data/symbols');
+    getSymbols: async (activeOnly: boolean = true) => {
+        const { data } = await apiClient.get<SymbolInfo[]>('/data/symbols', { params: { active_only: activeOnly } });
         return data;
     },
-    addSymbol: async (ticker: string) => {
-        await apiClient.post('/data/symbols', { ticker });
+    addSymbol: async (payload: { ticker: string, name?: string, sector?: string }) => {
+        await apiClient.post('/data/symbols', payload);
     },
-    download: async (symbols: string[], start: string, end: string) => {
+    deactivateSymbol: async (ticker: string) => {
+        await apiClient.delete(`/data/symbols/${ticker}`);
+    },
+    download: async (symbols: string[], start: string, end: string, timeframe: string = '1d') => {
         await apiClient.post('/data/candles/download', {
-            symbols, start_date: start, end_date: end, timeframe: '1d'
+            symbols, start_date: start, end_date: end, timeframe
         });
+    },
+    batchDownload: async (payload: { symbols: string[], start_date: string, end_date: string, timeframes: string[] }) => {
+        await apiClient.post('/data/candles/batch-download', payload);
     }
 };
 
@@ -142,6 +162,14 @@ export const backtestApi = {
 export const logApi = {
     getLogs: async (limit: number = 100) => {
         const { data } = await apiClient.get<LogEntry[]>('/logs', { params: { limit } });
+        return data;
+    },
+    getTrades: async (limit: number = 100, symbol?: string) => {
+        const { data } = await apiClient.get<any[]>('/logs/trades', { params: { limit, symbol } });
+        return data;
+    },
+    getSignals: async (limit: number = 100, symbol?: string) => {
+        const { data } = await apiClient.get<any[]>('/logs/signals', { params: { limit, symbol } });
         return data;
     }
 };
