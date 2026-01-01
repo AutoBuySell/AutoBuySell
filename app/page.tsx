@@ -4,14 +4,15 @@ import { useEffect, useState } from "react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { tradingApi, AccountInfo, Position } from "@/lib/api";
 
+import { wsClient } from "@/lib/websocket";
+
 export default function Home() {
   const [account, setAccount] = useState<AccountInfo | null>(null);
   const [positions, setPositions] = useState<Position[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    const fetchData = async () => {
+  const fetchData = async () => {
       try {
         const [accData, posData] = await Promise.all([
           tradingApi.getAccount(),
@@ -27,7 +28,24 @@ export default function Home() {
       }
     };
 
+  useEffect(() => {
+    // Initial fetch
     fetchData();
+
+    // Connect WebSocket
+    wsClient.connect();
+
+    // Subscribe to updates
+    const unsubscribe = wsClient.subscribe((msg: any) => {
+        if (msg.type === 'ORDER_FILLED') {
+            console.log("Trade detected, refreshing data...");
+            fetchData();
+        }
+    });
+
+    return () => {
+        unsubscribe();
+    };
   }, []);
 
   if (loading) return <div className="p-8">Loading Dashboard...</div>;
