@@ -12,12 +12,11 @@ class ExecutionService:
     Orchestrates the flow: Signal -> Risk Check -> Broker Order -> DB Record.
     """
 
-    def __init__(self, db: AsyncSession, broker: BrokerAdapter, risk_manager: RiskManager):
-        self.db = db
+    def __init__(self, broker: BrokerAdapter, risk_manager: RiskManager):
         self.broker = broker
         self.risk = risk_manager
 
-    async def process_signals(self, signals: List[StrategySignal]):
+    async def process_signals(self, db: AsyncSession, signals: List[StrategySignal]):
         if not signals:
             return
 
@@ -27,7 +26,7 @@ class ExecutionService:
         for signal in signals:
             try:
                 # Log the Signal first
-                await self._log_signal(signal)
+                await self._log_signal(db, signal)
 
                 if signal.signal_type == 'HOLD':
                     continue
@@ -50,7 +49,7 @@ class ExecutionService:
                 price_estimate = 100.0 # MOCK
 
                 # 2. Risk Validation
-                await self.risk.validate_order(account, order_req, price_estimate)
+                await self.risk.validate_order(self.db, account, order_req, price_estimate)
 
                 # 3. Submit to Broker
                 result = await self.broker.submit_order(order_req)
@@ -65,30 +64,30 @@ class ExecutionService:
                     qty=result.qty,
                     status=result.status
                 )
-                self.db.add(db_order)
+                db.add(db_order)
                 
                 # Log success
-                self.db.add(LogEntry(level="INFO", source="Execution", message=f"Order Placed: {result.client_order_id}"))
+                db.add(LogEntry(level="INFO", source="Execution", message=f"Order Placed: {result.client_order_id}"))
 
             except RiskException as e:
                 # Handled in RiskManager log
                 pass
             except Exception as e:
-                self.db.add(LogEntry(level="ERROR", source="Execution", message=f"Failed to process signal: {str(e)}"))
+                db.add(LogEntry(level="ERROR", source="Execution", message=f"Failed to process signal: {str(e)}"))
         
-        await self.db.commit()
+        await db.commit()
 
     def _calculate_quantity(self, signal: StrategySignal, account: AccountInfo) -> float:
         # Simple Logic: Buy 1 unit. 
         # TODO: Implement proper position sizing based on portfolio value & signal strength
         return 1.0
 
-    async def _log_signal(self, signal: StrategySignal):
+    async def _log_signal(self, db: AsyncSession, signal: StrategySignal):
         log = SignalLog(
             strategy_name="Unknown", # Should pass strategy name in context
             symbol=signal.symbol,
-            signal_type=signal.signal_type,
-            signal_strength=signal.strength,
-            raw_data={"rationale": signal.rationale}
+            signal_type=signal.signal_type.name, # Enum to str
+            signal_strength=signal.confidence, # corrected field name
+            raw_data={"rationale": signal.metadata.get("reason")} # access metadata
         )
-        self.db.add(log)
+        db.add(log)

@@ -1,24 +1,29 @@
 from typing import Protocol, List, Dict, Any, Optional
 from datetime import datetime
 from pydantic import BaseModel
+from enum import Enum
+from app.brokers.base import AccountInfo
+
+class SignalType(Enum):
+    BUY = "BUY"
+    SELL = "SELL"
+    EXIT = "EXIT"
+    HOLD = "HOLD"
 
 class StrategySignal(BaseModel):
     symbol: str
-    signal_type: str # 'BUY', 'SELL', 'EXIT', 'HOLD'
-    strength: float = 1.0 # 0.0 to 1.0
-    rationale: str
-    target_price: Optional[float] = None
-    stop_loss: Optional[float] = None
-    generated_at: datetime = datetime.now()
+    type: SignalType
+    confidence: float = 1.0 # 0.0 to 1.0
+    timestamp: datetime = datetime.now()
+    metadata: Dict[str, Any] = {}
 
 class StrategyContext(BaseModel):
     """
     Context passed to the strategy execution.
-    Contains current state, positions, and balance to help make decisions.
     """
-    cash_available: float
-    current_positions: Dict[str, float] # Symbol -> Qty
-    params: Dict[str, Any] # Strategy specific parameters
+    symbol: str
+    account: AccountInfo
+    params: Dict[str, Any] = {} # Strategy specific parameters
 
 class Strategy(Protocol):
     """
@@ -33,9 +38,8 @@ class Strategy(Protocol):
         """Called once when strategy is loaded."""
         ...
 
-    async def on_bar(self, context: StrategyContext, data: Any) -> List[StrategySignal]:
+    async def on_bar(self, context: StrategyContext, candles: List[Any]) -> List[StrategySignal]:
         """
         Called on every bar/data update. 
-        'data' structure might depend on the implementation, but usually DataFrame or Dict of Candles.
         """
         ...

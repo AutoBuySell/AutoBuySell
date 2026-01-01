@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Any
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
@@ -93,3 +93,45 @@ class AlpacaBroker(BrokerAdapter):
     async def get_market_status(self) -> bool:
         clock = self.trading_client.get_clock()
         return clock.is_open
+
+    async def get_historicals(self, symbol: str, timeframe: str, limit: int) -> List[Any]:
+        # We need a separate Data Client for this.
+        # Initialize it lazily or in __init__? 
+        # For now, create a new one here or better, added to __init__.
+        # But wait, __init__ is synchronous. 
+        from alpaca.data.historical import StockHistoricalDataClient
+        from alpaca.data.requests import StockLatestBarRequest, StockBarsRequest
+        from alpaca.data.timeframe import TimeFrame
+        
+        client = StockHistoricalDataClient(
+            api_key=settings.ALPACA_API_KEY,
+            secret_key=settings.ALPACA_SECRET_KEY
+        )
+
+        tf_map = {
+            "1m": TimeFrame.Minute,
+            "5m": TimeFrame(5, "Min"),
+            "15m": TimeFrame(15, "Min"),
+            "1h": TimeFrame.Hour,
+            "1d": TimeFrame.Day
+        }
+        alpaca_tf = tf_map.get(timeframe, TimeFrame.Day)
+        
+        # Calculate start time roughly based on limit
+        # This is tricky for exact "last N bars", but we can fetch a bit more and slice.
+        # For '1d', 100 days ago.
+        from datetime import datetime, timedelta
+        if timeframe == "1d":
+            start = datetime.now() - timedelta(days=limit * 2) 
+        else:
+            start = datetime.now() - timedelta(days=5) # fallback
+            
+        req = StockBarsRequest(
+            symbol_or_symbols=symbol,
+            timeframe=alpaca_tf,
+            start=start,
+            limit=limit
+        )
+        
+        bars = client.get_stock_bars(req)
+        return bars[symbol] if symbol in bars else []

@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, date
 from typing import Optional, Any
 from sqlalchemy import (
     String, Integer, Float, Boolean, DateTime, JSON, ForeignKey, 
@@ -135,3 +135,29 @@ class LogEntry(TimeStampedBase):
     source: Mapped[str] = mapped_column(String(50)) # 'execution', 'broker', 'strategy'
     message: Mapped[str] = mapped_column(Text)
     context: Mapped[Optional[dict]] = mapped_column(JSONB)
+
+# --- Backtest ---
+
+class BacktestRun(TimeStampedBase):
+    __tablename__ = "backtest_runs"
+    
+    strategy_name: Mapped[str] = mapped_column(String(100))
+    symbol: Mapped[str] = mapped_column(String(100)) # CSV if multiple
+    timeframe: Mapped[str] = mapped_column(String(10))
+    start_date: Mapped[datetime] = mapped_column(DateTime) # Using DateTime for flexibility
+    end_date: Mapped[datetime] = mapped_column(DateTime)
+    initial_capital: Mapped[float] = mapped_column(Float)
+    params: Mapped[dict] = mapped_column(JSONB)
+    status: Mapped[str] = mapped_column(String(20)) # RUNNING, COMPLETED, FAILED
+    error_message: Mapped[Optional[str]] = mapped_column(Text)
+
+class BacktestResult(TimeStampedBase):
+    __tablename__ = "backtest_results"
+    
+    run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("backtest_runs.id"))
+    total_return: Mapped[float] = mapped_column(Float) # Percent
+    max_drawdown: Mapped[float] = mapped_column(Float)
+    win_rate: Mapped[float] = mapped_column(Float)
+    total_trades: Mapped[int] = mapped_column(Integer)
+    equity_curve: Mapped[list] = mapped_column(JSONB) # List of {time, equity}
+    metrics: Mapped[dict] = mapped_column(JSONB) # Detailed trades etc

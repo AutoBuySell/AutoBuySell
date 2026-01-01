@@ -2,15 +2,36 @@ from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from app.core.database import engine, Base
 from app.api import trading
+from app.api import settings as settings_router
+from app.api import data as data_router
 from app.core.config import settings
+
+from app.brokers.alpaca import AlpacaBroker
+from app.services.execution import ExecutionService
+from app.services.risk import RiskManager
+from app.services.trading import TradingService
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: Create tables (for now, simplistic)
+    # Startup: Create tables
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    
+    # Initialize Services
+    broker = AlpacaBroker()
+    risk_manager = RiskManager()
+    execution_service = ExecutionService(broker, risk_manager)
+    trading_service = TradingService(broker, execution_service)
+    
+    app.state.trading_service = trading_service
+    
+    # Auto-start if configured (Optional, keeping off by default for safety)
+    # await trading_service.start()
+    
     yield
+    
     # Shutdown
+    await trading_service.stop()
     await engine.dispose()
 
 app = FastAPI(
@@ -31,6 +52,11 @@ app.add_middleware(
 )
 
 app.include_router(trading.router, prefix="/api/v1/trading", tags=["Trading"])
+app.include_router(settings_router.router, prefix="/api/v1/settings", tags=["Settings"])
+app.include_router(data_router.router, prefix="/api/v1/data", tags=["Data"])
+
+from app.api import backtest
+app.include_router(backtest.router, prefix="/api/v1/backtest", tags=["Backtest"])
 
 @app.get("/health")
 def health_check():
