@@ -34,6 +34,13 @@ class OrderResult(BaseModel):
     symbol: str
     qty: float
 
+class PortfolioHistory(BaseModel):
+    timestamp: List[int] # Unix timestamp
+    equity: List[float]
+    profit_loss: List[float]
+    profit_loss_pct: List[float]
+    timeframe: str
+
 class BrokerAdapter(Protocol):
     """
     Interface for interacting with different brokerage APIs (e.g., Alpaca).
@@ -62,4 +69,8 @@ class BrokerAdapter(Protocol):
         
     async def get_market_status(self) -> bool:
         """Return True if the market is currently open."""
+        ...
+
+    async def get_portfolio_history(self, period: str = "1M", timeframe: str = "1D") -> PortfolioHistory:
+        """Fetch portfolio equity history."""
         ...

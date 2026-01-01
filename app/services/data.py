@@ -26,80 +26,119 @@ class DataService:
         timeframe: str = "1d"
     ):
         """Download historical data from Alpaca and save to DB"""
+    async def download_historical(
+        self,
+        symbols: List[str],
+        start_date: date,
+        end_date: date,
+        timeframe: str = "1d"
+    ):
+        """Download historical data from Alpaca and save to DB"""
+        import requests
         try:
-            # Map timeframe string to Alpaca TimeFrame
+            # Map timeframe string to Alpaca API values
             tf_map = {
-                "1m": TimeFrame.Minute,
-                "5m": TimeFrame(5, "Min"),
-                "15m": TimeFrame(15, "Min"),
-                "1h": TimeFrame.Hour,
-                "1d": TimeFrame.Day
+                "1m": "1Min",
+                "5m": "5Min",
+                "15m": "15Min",
+                "30m": "30Min",
+                "1h": "1Hour",
+                "1d": "1Day"
             }
             
-            alpaca_tf = tf_map.get(timeframe, TimeFrame.Day)
+            api_tf = tf_map.get(timeframe, "1Day")
             
-            # Create request
-            # Explicitly use IEX for free plan compatibility
-            request = StockBarsRequest(
-                symbol_or_symbols=symbols,
-                timeframe=alpaca_tf,
-                start=datetime.combine(start_date, datetime.min.time()),
-                end=datetime.combine(end_date, datetime.max.time()),
-                feed=DataFeed.IEX
-            )
+            url = "https://data.alpaca.markets/v2/stocks/bars"
+            headers = {
+                "APCA-API-KEY-ID": settings.ALPACA_API_KEY,
+                "APCA-API-SECRET-KEY": settings.ALPACA_SECRET_KEY,
+                "accept": "application/json"
+            }
             
-            # Fetch data
-            bars = self.alpaca_data_client.get_stock_bars(request)
-            
-            # Process and save
             saved_count = 0
-            for symbol in symbols:
-                if symbol not in bars:
-                    continue
-                
-                symbol_bars = bars[symbol]
-                for bar in symbol_bars:
-                    # Check if already exists using valid SQLAlchemy
-                    stmt = select(Candle).where(
-                        and_(
-                            Candle.symbol == symbol,
-                            Candle.timeframe == timeframe,
-                            Candle.timestamp == bar.timestamp
-                        )
-                    )
-                    result = await self.db.execute(stmt)
-                    
-                    if result.scalar_one_or_none():
-                        continue
-                    
-                    candle = Candle(
-                        symbol=symbol,
-                        timeframe=timeframe,
-                        timestamp=bar.timestamp,
-                        open=float(bar.open),
-                        high=float(bar.high),
-                        low=float(bar.low),
-                        close=float(bar.close),
-                        volume=float(bar.volume)
-                    )
-                    
-                    self.db.add(candle)
-                    saved_count += 1
             
+            # Function to run requests in async loop
+            import asyncio
+            loop = asyncio.get_event_loop()
+            
+            # Split symbols into chunks of 20
+            chunk_size = 20
+            for i in range(0, len(symbols), chunk_size):
+                chunk_syms = symbols[i:i + chunk_size]
+                syms_str = ",".join(chunk_syms)
+                
+                params = {
+                    "symbols": syms_str,
+                    "timeframe": api_tf,
+                    "start": start_date.isoformat(),
+                    "end": end_date.isoformat(),
+                    "limit": 10000,
+                    "feed": "iex",
+                    "adjustment": "raw"
+                }
+                
+                while True:
+                    # Run requests.get in executor to avoid blocking
+                    response = await loop.run_in_executor(
+                        None, 
+                        lambda: requests.get(url, headers=headers, params=params)
+                    )
+                    
+                    if response.status_code != 200:
+                        # Log error but try to continue or break?
+                        # Continuing might loop forever if error is persistent.
+                        # Break for this chunk.
+                        break
+                        
+                    data = response.json()
+                    bars_map = data.get("bars", {})
+                    
+                    for sym, bars in bars_map.items():
+                        for bar in bars:
+                            ts_str = bar["t"]
+                            ts = datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
+                            
+                            stmt = select(Candle).where(
+                                and_(
+                                    Candle.symbol == sym,
+                                    Candle.timeframe == timeframe,
+                                    Candle.timestamp == ts
+                                )
+                            )
+                            result = await self.db.execute(stmt)
+                            if result.scalar_one_or_none():
+                                continue
+                            
+                            candle = Candle(
+                                symbol=sym,
+                                timeframe=timeframe,
+                                timestamp=ts,
+                                open=float(bar["o"]),
+                                high=float(bar["h"]),
+                                low=float(bar["l"]),
+                                close=float(bar["c"]),
+                                volume=float(bar["v"])
+                            )
+                            self.db.add(candle)
+                            saved_count += 1
+                    
+                    next_token = data.get("next_page_token")
+                    if not next_token:
+                        break
+                    params["page_token"] = next_token
+
             await self.db.commit()
             
-            # Log success
             log = LogEntry(
                 level="INFO",
                 source="DataService",
-                message=f"Downloaded {saved_count} candles for {len(symbols)} symbols",
+                message=f"Downloaded {saved_count} candles for {len(symbols)} symbols ({timeframe})",
                 context={"symbols": symbols, "timeframe": timeframe}
             )
             self.db.add(log)
             await self.db.commit()
             
         except Exception as e:
-            # Log error
             log = LogEntry(
                 level="ERROR",
                 source="DataService",

@@ -173,3 +173,34 @@ async def download_historical_data(
         "symbols": request.symbols,
         "timeframe": request.timeframe
     }
+
+class BatchDownloadRequest(BaseModel):
+    symbols: List[str]
+    start_date: date
+    end_date: date
+    timeframes: List[str] = ["1d", "1h", "30m", "15m"]
+
+@router.post("/candles/batch-download")
+async def batch_download_historical_data(
+    request: BatchDownloadRequest,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db)
+):
+    """Trigger batch download of historical data for multiple timeframes"""
+    data_service = DataService(db)
+    
+    for tf in request.timeframes:
+        background_tasks.add_task(
+            data_service.download_historical,
+            symbols=request.symbols,
+            start_date=request.start_date,
+            end_date=request.end_date,
+            timeframe=tf
+        )
+    
+    return {
+        "message": "Batch download started",
+        "symbols": request.symbols,
+        "timeframes": request.timeframes,
+        "period": f"{request.start_date} to {request.end_date}"
+    }

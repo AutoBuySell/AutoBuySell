@@ -75,3 +75,17 @@ async def manual_order(order: OrderRequest, request: Request):
     )
     
     return await service.broker.submit_order(req)
+
+from app.brokers.base import PortfolioHistory
+
+@router.get("/history", response_model=PortfolioHistory)
+async def get_portfolio_history(
+    period: str = "1M",
+    timeframe: str = "1D",
+    request: Request = None # type: ignore
+):
+    """Get portfolio equity history"""
+    # Fix: Request was not injected properly in signature if simply 'request: Request' without dependency or default? 
+    # Actually FastAPI handles it by type hint.
+    service: TradingService = request.app.state.trading_service
+    return await service.broker.get_portfolio_history(period=period, timeframe=timeframe)

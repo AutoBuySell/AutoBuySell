@@ -135,3 +135,24 @@ class AlpacaBroker(BrokerAdapter):
         
         bars = client.get_stock_bars(req)
         return bars[symbol] if symbol in bars else []
+
+    async def get_portfolio_history(self, period: str = "1M", timeframe: str = "1D") -> Any:
+        # Use trading_client.get_portfolio_history with correct Request object
+        from alpaca.trading.requests import GetPortfolioHistoryRequest
+        
+        req = GetPortfolioHistoryRequest(
+            period=period,
+            timeframe=timeframe,
+            extended_hours=False
+        )
+        
+        history = self.trading_client.get_portfolio_history(req)
+        
+        from app.brokers.base import PortfolioHistory
+        return PortfolioHistory(
+            timestamp=list(history.timestamp) if history.timestamp else [],
+            equity=list(history.equity) if history.equity else [],
+            profit_loss=list(history.profit_loss) if history.profit_loss else [],
+            profit_loss_pct=list(history.profit_loss_pct) if history.profit_loss_pct else [],
+            timeframe=timeframe
+        )
