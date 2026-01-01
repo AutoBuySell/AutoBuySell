@@ -6,6 +6,7 @@ from app.services.risk import RiskManager, RiskException
 from app.domain.models import Order, SignalLog, LogEntry
 from datetime import datetime
 import uuid
+from app.api.ws import manager
 
 class ExecutionService:
     """
@@ -68,6 +69,19 @@ class ExecutionService:
                 
                 # Log success
                 db.add(LogEntry(level="INFO", source="Execution", message=f"Order Placed: {result.client_order_id}"))
+
+                # 5. Broadcast via WebSocket
+                await manager.broadcast({
+                    "type": "ORDER_FILLED",
+                    "data": {
+                        "symbol": result.symbol,
+                        "side": order_req.side,
+                        "qty": result.qty,
+                        "price": 0.0, # Result might not have fill price immediately if market order
+                        "status": result.status,
+                        "timestamp": str(datetime.now())
+                    }
+                })
 
             except RiskException as e:
                 # Handled in RiskManager log

@@ -58,6 +58,12 @@ app.include_router(data_router.router, prefix="/api/v1/data", tags=["Data"])
 from app.api import backtest
 app.include_router(backtest.router, prefix="/api/v1/backtest", tags=["Backtest"])
 
+from app.api import logs
+app.include_router(logs.router, prefix="/api/v1/logs", tags=["Logs"])
+
+from app.api import ws
+app.include_router(ws.router, prefix="/api/v1/ws", tags=["WebSocket"])
+
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
