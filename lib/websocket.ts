@@ -56,5 +56,14 @@ class WebSocketClient {
 
 // Singleton instance
 // Note: In Next.js SSR this might be an issue, but we use it in 'use client' components
-const WS_URL = 'ws://localhost:8000/api/v1/ws/stream';
-export const wsClient = new WebSocketClient(WS_URL);
+const getWsUrl = () => {
+    if (typeof window === 'undefined') return 'ws://localhost:8000/api/v1/ws/stream';
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const host = window.location.hostname;
+    // Assume API is on port 8000 if frontend is dev (3000)
+    // Or allow overriding via env
+    const port = '8000'; 
+    return `${protocol}//${host}:${port}/api/v1/ws/stream`;
+};
+
+export const wsClient = new WebSocketClient(getWsUrl());

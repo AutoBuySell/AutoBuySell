@@ -171,19 +171,20 @@ export default function SymbolManager() {
                     <CardTitle className="text-lg">Download Historical Data</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-3">
-                    <div className="flex gap-2">
+                    <div className="flex gap-2 items-center">
+                        <span className="text-xl">📅</span>
                         <input 
                             type="date" 
                             value={startDate}
                             onChange={(e) => setStartDate(e.target.value)}
-                            className="px-2 py-1 border rounded text-sm bg-background"
+                            className="px-2 py-1 border rounded text-sm bg-background text-foreground [color-scheme:dark]"
                         />
                         <span className="self-center">to</span>
-                        <input 
+                         <input 
                             type="date" 
                             value={endDate}
                             onChange={(e) => setEndDate(e.target.value)}
-                            className="px-2 py-1 border rounded text-sm bg-background"
+                            className="px-2 py-1 border rounded text-sm bg-background text-foreground [color-scheme:dark]"
                         />
                     </div>
                     

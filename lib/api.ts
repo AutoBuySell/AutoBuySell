@@ -1,7 +1,10 @@
 import axios from 'axios';
 
 // Base URL for all API v1 endpoints
-const API_BASE = 'http://localhost:8000/api/v1';
+// Base URL for all API v1 endpoints
+const API_BASE = typeof window !== 'undefined' 
+    ? `http://${window.location.hostname}:8000/api/v1`
+    : (process.env.NEXT_PUBLIC_BACKEND_SERVER_URL || 'http://localhost:8000/api/v1');
 
 export const apiClient = axios.create({
   baseURL: API_BASE,
@@ -137,6 +140,12 @@ export const dataApi = {
     },
     batchDownload: async (payload: { symbols: string[], start_date: string, end_date: string, timeframes: string[] }) => {
         await apiClient.post('/data/candles/batch-download', payload);
+    },
+    checkDataAvailability: async (symbols: string[], startDate: string, endDate: string, timeframe: string = '1d') => {
+        const { data } = await apiClient.get<string[]>('/data/candles/check-availability', {
+            params: { symbols: symbols.join(','), start_date: startDate, end_date: endDate, timeframe }
+        });
+        return data; // Returns missing symbols
     }
 };
 
@@ -156,6 +165,24 @@ export const backtestApi = {
     getResult: async (id: string) => {
         const { data } = await apiClient.get<BacktestResult>(`/backtest/results/${id}`);
         return data;
+    },
+    // Settings API (Merged here or separate?)
+    getStrategyParams: async (strategy: string, symbol?: string | null) => {
+        const params = symbol ? { symbol } : {};
+        try {
+            const { data } = await apiClient.get<{version: number, symbol: string | null, params: Record<string, any>}>(`/settings/strategies/${strategy}/params/active`, { params });
+            return data;
+        } catch (e: any) {
+            if (e.response && e.response.status === 404) {
+                return null;
+            }
+            throw e;
+        }
+    },
+    updateStrategyParams: async (strategy: string, params: Record<string, any>, symbol?: string | null) => {
+        const query = symbol ? `?symbol=${symbol}` : '';
+        const { data } = await apiClient.put(`/settings/strategies/${strategy}/params${query}`, { params });
+        return data;
     }
 };
 
@@ -171,5 +198,18 @@ export const logApi = {
     getSignals: async (limit: number = 100, symbol?: string) => {
         const { data } = await apiClient.get<any[]>('/logs/signals', { params: { limit, symbol } });
         return data;
+    }
+};
+
+export const statisticsApi = {
+    getNominalIncome: async () => {
+        const { data } = await apiClient.get<{symbol: string, income: number, qty: number}[]>('/statistics/nominal-income');
+        return data;
+    },
+    getEquityPerformance: async (symbol: string, period: string = '1M', type: string = 'nominal') => {
+        const { data } = await apiClient.get<{data: Array<{date: string, price: number, qty: number, nominal_income: number, realized_income: number}>}>(`/statistics/equity-performance/${symbol}`, {
+            params: { period, type }
+        });
+        return data.data;
     }
 };
