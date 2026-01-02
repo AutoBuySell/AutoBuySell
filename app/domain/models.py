@@ -65,11 +65,12 @@ class StrategyParam(TimeStampedBase):
     
     strategy_name: Mapped[str] = mapped_column(ForeignKey("strategies.name"))
     version: Mapped[int] = mapped_column(Integer, default=1)
+    symbol: Mapped[Optional[str]] = mapped_column(String(20), nullable=True) # Specific symbol override
     params: Mapped[dict] = mapped_column(JSONB) # e.g. {"window": 20, "stop_loss": 0.05}
     is_active: Mapped[bool] = mapped_column(Boolean, default=False)
     
     __table_args__ = (
-        UniqueConstraint('strategy_name', 'version', name='uq_strategy_version'),
+        UniqueConstraint('strategy_name', 'symbol', 'version', name='uq_strategy_symbol_version'),
     )
 
 # --- Trading Operations ---

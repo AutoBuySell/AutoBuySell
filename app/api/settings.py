@@ -61,20 +61,34 @@ async def get_strategy_params(strategy_name: str, db: AsyncSession = Depends(get
     ]
 
 @router.get("/strategies/{strategy_name}/params/active")
-async def get_active_params(strategy_name: str, db: AsyncSession = Depends(get_db)):
-    """Get the currently active parameters for a strategy"""
-    result = await db.execute(
+async def get_active_params(
+    strategy_name: str, 
+    symbol: str | None = None,
+    db: AsyncSession = Depends(get_db)
+):
+    """Get the currently active parameters (Default or Symbol-specific)"""
+    stmt = (
         select(StrategyParam)
         .where(StrategyParam.strategy_name == strategy_name)
         .where(StrategyParam.is_active == True)
     )
+    
+    if symbol:
+        stmt = stmt.where(StrategyParam.symbol == symbol)
+    else:
+        stmt = stmt.where(StrategyParam.symbol.is_(None))
+        
+    result = await db.execute(stmt)
     param = result.scalar_one_or_none()
     
     if not param:
+        # If symbol specific not found, return 404? Or maybe defaults?
+        # UX wise, frontend might want to know if override exists.
         raise HTTPException(status_code=404, detail="No active parameters found")
     
     return {
         "version": param.version,
+        "symbol": param.symbol,
         "params": param.params,
         "created_at": param.created_at.isoformat()
     }
@@ -83,9 +97,10 @@ async def get_active_params(strategy_name: str, db: AsyncSession = Depends(get_d
 async def update_strategy_params(
     strategy_name: str,
     request: ParamUpdateRequest,
+    symbol: str | None = None,
     db: AsyncSession = Depends(get_db)
 ):
-    """Update strategy parameters (creates new version)"""
+    """Update strategy parameters (creates new version). Optional symbol for overrides."""
     # Verify strategy exists
     result = await db.execute(
         select(StrategyMeta).where(StrategyMeta.name == strategy_name)
@@ -95,14 +110,17 @@ async def update_strategy_params(
     if not strategy:
         raise HTTPException(status_code=404, detail="Strategy not found")
     
-    # Deactivate all previous versions
-    await db.execute(
+    # Deactivate previous versions for this scope
+    stmt = (
         select(StrategyParam)
         .where(StrategyParam.strategy_name == strategy_name)
     )
-    old_params = (await db.execute(
-        select(StrategyParam).where(StrategyParam.strategy_name == strategy_name)
-    )).scalars().all()
+    if symbol:
+        stmt = stmt.where(StrategyParam.symbol == symbol)
+    else:
+        stmt = stmt.where(StrategyParam.symbol.is_(None))
+        
+    old_params = (await db.execute(stmt)).scalars().all()
     
     for p in old_params:
         p.is_active = False
@@ -114,6 +132,7 @@ async def update_strategy_params(
     new_param = StrategyParam(
         strategy_name=strategy_name,
         version=max_version + 1,
+        symbol=symbol,
         params=request.params,
         is_active=True
     )
@@ -124,6 +143,7 @@ async def update_strategy_params(
     
     return {
         "version": new_param.version,
+        "symbol": new_param.symbol,
         "params": new_param.params,
-        "message": f"Created version {new_param.version}"
+        "message": f"Created version {new_param.version} for {'defaults' if not symbol else symbol}"
     }

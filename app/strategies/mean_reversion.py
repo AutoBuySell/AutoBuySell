@@ -14,16 +14,25 @@ class MeanReversionStrategy(Strategy):
     
     def __init__(self):
         self._name = "MeanReversion_v1"
+        self._timeframe = "30Min"  # Default for mean reversion
         self.params = {
-            "duration": 20,       # Lookback window
-            "thr_buy": 0.05,      # Drop threshold (5%)
-            "thr_sell": 0.05,     # Rise threshold (5%)
-            "rebound": 0.005      # Rebound threshold (0.5%)
+            "timeframe": "30Min",     # User-configurable timeframe
+            "duration": 24,           # Lookback window (legacy default: 24)
+            "thr_buy": 0.05,          # Drop threshold (5%)
+            "thr_sell": 0.05,         # Rise threshold (5%)
+            "rebound": 0.0,           # Rebound threshold (legacy default: 0)
+            "target_value": 1000.0,   # Target position value per symbol
+            "limit": 1000.0,          # Max order amount
+            "price_type": "open",     # "open" or "close" (legacy used open)
         }
 
     @property
     def name(self) -> str:
         return self._name
+
+    @property
+    def timeframe(self) -> str:
+        return self.params.get("timeframe", self._timeframe)
 
     async def initialize(self, params: Dict[str, Any]):
         self.params.update(params)
@@ -32,12 +41,12 @@ class MeanReversionStrategy(Strategy):
         if not candles or len(candles) < self.params["duration"] + 1:
             return []
 
-        # Convert to numpy array for easier calculation
-        # We need 'open' or 'close'? Original used 'o' (open) but usually close is better. 
-        # Legacy code: data_np = np.array(asset.data['o'])
-        # Let's stick to 'close' for modern standard, unless critical.
-        # Actually, let's use 'close' as it's the completed price of the bar.
-        prices = np.array([c.close for c in candles])
+        # Use open or close based on price_type parameter (legacy used 'open')
+        price_type = self.params.get("price_type", "open")
+        if price_type == "open":
+            prices = np.array([c.open for c in candles])
+        else:
+            prices = np.array([c.close for c in candles])
         
         current_price = prices[-1]
         
@@ -49,7 +58,7 @@ class MeanReversionStrategy(Strategy):
             return []
             
         reference_window = prices[-(lookback + 1) : -1]
-        prev_close = reference_window[-1]
+        prev_price = reference_window[-1]
         
         min_price = np.min(reference_window)
         max_price = np.max(reference_window)
@@ -67,8 +76,8 @@ class MeanReversionStrategy(Strategy):
         is_deep_enough = (1 - thr_buy) * max_price >= current_price
         
         # 2. Price is rebounding
-        # (1 + rebound) * prev_close <= current_price <-- Price rose by rebound % from prev
-        is_rebounding = (1 + rebound) * prev_close <= current_price
+        # (1 + rebound) * prev_price <= current_price <-- Price rose by rebound % from prev
+        is_rebounding = (1 + rebound) * prev_price <= current_price
         
         if is_deep_enough and is_rebounding:
             # Calculate confidence
@@ -85,7 +94,11 @@ class MeanReversionStrategy(Strategy):
                 metadata={
                     "reason": "Dip + Rebound",
                     "max_price": float(max_price),
-                    "drop_pct": float(1 - current_price/max_price)
+                    "drop_pct": float(1 - current_price/max_price),
+                    "current_price": float(current_price),
+                    # moving_avg is roughly the mean of window? 
+                    # AT_V0 logic used simple average of last 20 close prices.
+                    "moving_avg": float(np.mean(reference_window))
                 }
             ))
 
@@ -95,8 +108,8 @@ class MeanReversionStrategy(Strategy):
         is_high_enough = (1 + thr_sell) * min_price <= current_price
         
         # 2. Price is pulling back
-        # (1 - rebound) * prev_close >= current_price <-- Price fell by rebound % from prev
-        is_pullback = (1 - rebound) * prev_close >= current_price
+        # (1 - rebound) * prev_price >= current_price <-- Price fell by rebound % from prev
+        is_pullback = (1 - rebound) * prev_price >= current_price
         
         if is_high_enough and is_pullback:
             # confidence = pow(2, (current_price / min_price - 1) / asset.settings['thr_sell'] - 2)
@@ -111,7 +124,9 @@ class MeanReversionStrategy(Strategy):
                 metadata={
                     "reason": "Peak + Pullback",
                     "min_price": float(min_price),
-                    "rise_pct": float(current_price/min_price - 1)
+                    "rise_pct": float(current_price/min_price - 1),
+                    "current_price": float(current_price),
+                    "moving_avg": float(np.mean(reference_window))
                 }
             ))
             

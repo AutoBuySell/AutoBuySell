@@ -75,27 +75,44 @@ class TradingService:
                 if not symbols:
                     return
 
-                # 2. Account Info
+                # 2. Account Info & Positions Sync
                 account = await self.broker.get_account_info()
+                await self.sync_positions(db)
                 
-                # 3. Strategy Config (Simplified: Single Strategy for MVP)
+                # 3. Strategy Config
                 strategy_name = "MeanReversion_v1"
                 strategy = self.strategies.get(strategy_name)
                 
-                param_res = await db.execute(
+                # Fetch Default Params
+                default_res = await db.execute(
                     select(StrategyParam)
                     .where(StrategyParam.strategy_name == strategy_name)
                     .where(StrategyParam.is_active == True)
+                    .where(StrategyParam.symbol.is_(None))
                 )
-                param_record = param_res.scalar_one_or_none()
+                default_param = default_res.scalar_one_or_none()
                 
-                if not param_record:
+                if not default_param:
+                    logger.warning("No default strategy params found.")
                     return
                 
-                await strategy.initialize(param_record.params)
+                # Fetch All Symbol Overrides
+                overrides_res = await db.execute(
+                    select(StrategyParam)
+                    .where(StrategyParam.strategy_name == strategy_name)
+                    .where(StrategyParam.is_active == True)
+                    .where(StrategyParam.symbol.is_not(None))
+                )
+                overrides = {p.symbol: p.params for p in overrides_res.scalars().all()}
                 
                 # 4. Process Symbols
                 for symbol in symbols:
+                    # Determine Params: Override > Default
+                    current_params = overrides.get(symbol.ticker, default_param.params)
+                    
+                    # Re-initializing strategy every time is okay for stateless strategy.
+                    await strategy.initialize(current_params)
+                    
                     await self._process_symbol(db, symbol.ticker, strategy, account)
 
             except Exception as e:
@@ -108,6 +125,72 @@ class TradingService:
                 ))
                 await db.commit()
 
+    async def sync_positions(self, db: AsyncSession):
+        """Sync local Position table with Broker positions"""
+        try:
+            broker_positions = await self.broker.get_positions()
+            
+            # Simple Sync: Delete all and re-insert (or update/upsert)
+            # For MVP, simpler to clear and insert or match. 
+            # Given we want to track 'unrealized_pl', let's use what Broker gives us.
+            
+            # 1. Get current DB positions map
+            from app.domain.models import Position
+            
+            # For now, let's just truncate and replace to ensure accuracy with Broker, 
+            # or update existing. Upsert is safer for IDs but we don't rely on Position IDs much yet.
+            # Let's delete all and re-add to be safe and simple for "Live" view sync.
+            # Ideally we update to keep history if needed, but Position is usually a snapshot.
+            
+            # Note: This might be heavy if called every minute. Optimisation: Check if changed.
+            # But 10-20 positions is negligible.
+            
+            await db.execute(select(Position)) # Just to check connectivity? 
+            # Better: Delete all active entries? 
+            # Let's just update/insert.
+            
+            # Get existing
+            existing_res = await db.execute(select(Position))
+            existing_map = {p.symbol: p for p in existing_res.scalars().all()}
+            
+            active_symbols = set()
+            
+            for bp in broker_positions:
+                active_symbols.add(bp.symbol)
+                if bp.symbol in existing_map:
+                    # Update
+                    p = existing_map[bp.symbol]
+                    p.qty = bp.qty
+                    p.avg_entry_price = bp.avg_entry_price
+                    p.current_price = bp.current_price
+                    p.market_value = bp.market_value
+                    p.unrealized_pl = bp.unrealized_pl
+                    p.unrealized_plpc = bp.unrealized_plpc
+                else:
+                    # Insert
+                    new_p = Position(
+                        symbol=bp.symbol,
+                        qty=bp.qty,
+                        avg_entry_price=bp.avg_entry_price,
+                        current_price=bp.current_price,
+                        market_value=bp.market_value,
+                        unrealized_pl=bp.unrealized_pl,
+                        unrealized_plpc=bp.unrealized_plpc,
+                        side=bp.side
+                    )
+                    db.add(new_p)
+            
+            # Remove positions that no longer exist in Broker
+            for sym, p in existing_map.items():
+                if sym not in active_symbols:
+                    await db.delete(p)
+            
+            await db.commit()
+            
+        except Exception as e:
+            logger.error(f"Failed to sync positions: {e}")
+
+
     async def _process_symbol(self, db: AsyncSession, ticker: str, strategy, account: AccountInfo):
         try:
             # Fetch Data
@@ -115,8 +198,8 @@ class TradingService:
             limit = strategy.params.get("duration", 20) + 10
             
             # Fetch from Broker (Alpaca)
-            # Timeframe hardcoded to 1d for this strategy port
-            raw_candles = await self.broker.get_historicals(ticker, "1d", limit)
+            # Use strategy's configured timeframe
+            raw_candles = await self.broker.get_historicals(ticker, strategy.timeframe, limit)
             
             if not raw_candles:
                 return
@@ -126,7 +209,7 @@ class TradingService:
             for b in raw_candles:
                 candles.append(Candle(
                     symbol=ticker,
-                    timeframe="1d",
+                    timeframe=strategy.timeframe,
                     timestamp=b.timestamp,
                     open=b.open,
                     high=b.high,

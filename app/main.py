@@ -45,7 +45,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost"],
+    # allow_origins=["http://localhost:3000", "http://tghome:3000"], # Wildcard conflicts with allow_credentials
+    allow_origin_regex="https?://.*", # Allow all http/https origins
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -60,6 +61,9 @@ app.include_router(backtest.router, prefix="/api/v1/backtest", tags=["Backtest"]
 
 from app.api import logs
 app.include_router(logs.router, prefix="/api/v1/logs", tags=["Logs"])
+
+from app.api import statistics
+app.include_router(statistics.router, prefix="/api/v1/statistics", tags=["Statistics"])
 
 from app.api import ws
 app.include_router(ws.router, prefix="/api/v1/ws", tags=["WebSocket"])

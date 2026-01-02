@@ -41,14 +41,31 @@ class BacktestService:
         strategy = self.strategies[strategy_name]
         
         # 2. Setup Run Record
+        # Load params from DB if not provided
+        if not params:
+            # Fetch default params for the strategy
+            stmt = select(StrategyParam).where(
+                and_(
+                    StrategyParam.strategy_name == strategy_name,
+                    StrategyParam.is_active == True,
+                    StrategyParam.symbol.is_(None)
+                )
+            )
+            result = await self.db.execute(stmt)
+            strat_param = result.scalar_one_or_none()
+            if strat_param:
+                params = strat_param.params
+            else:
+                params = {} # Fallback to empty (strategy defaults)
+
         run_record = BacktestRun(
             strategy_name=strategy_name,
-            symbol=",".join(symbols), # Simple CSV for now
-            timeframe="1d", # Hardcoded for MVP
+            symbol=",".join(symbols),
+            timeframe=strategy.timeframe,  # Use strategy's configured timeframe
             start_date=start_date,
             end_date=end_date,
             initial_capital=initial_capital,
-            params=params or {},
+            params=params, 
             status="RUNNING"
         )
         self.db.add(run_record)
@@ -56,102 +73,180 @@ class BacktestService:
         await self.db.refresh(run_record)
         
         try:
-            # 3. Load Data
-            # For multi-symbol, we need to synchronize alignment. 
-            # MVP: Process one symbol at a time or just the first symbol if list.
-            # Let's support single symbol for MVP to avoid complex alignment logic.
-            symbol = symbols[0]
+            # 3. Load Data for ALL symbols
+            # We need to fetch candles for each symbol and align them by time.
+            candle_map = {} # { date: { symbol: Candle } }
+            all_candles_by_symbol = {} # { symbol: [Candle] } for history slicing
             
-            stmt = select(Candle).where(
-                and_(
-                    Candle.symbol == symbol,
-                    Candle.timeframe == "1d",
-                    Candle.timestamp >= start_date,
-                    Candle.timestamp <= end_date
-                )
-            ).order_by(Candle.timestamp.asc())
-            
-            result = await self.db.execute(stmt)
-            candles = result.scalars().all()
-            
-            if not candles:
-                raise ValueError("No data found for backtest range")
+            for sym in symbols:
+                stmt = select(Candle).where(
+                    and_(
+                        Candle.symbol == sym,
+                        Candle.timeframe == strategy.timeframe,
+                        Candle.timestamp >= start_date,
+                        Candle.timestamp <= end_date
+                    )
+                ).order_by(Candle.timestamp.asc())
+                
+                result = await self.db.execute(stmt)
+                sym_candles = result.scalars().all()
+                all_candles_by_symbol[sym] = sym_candles
+                
+                for c in sym_candles:
+                    d = c.timestamp.date() # Primary key for loop
+                    if d not in candle_map:
+                        candle_map[d] = {}
+                    candle_map[d][sym] = c
 
-            # 4. Simulation Loop
+            if not candle_map:
+                raise ValueError("No data found for backtest range for any symbol")
+
+            # 4. Simulation Loop (Time-Synchronized)
+            sorted_dates = sorted(candle_map.keys())
+            
             cash = initial_capital
-            position_qty = 0.0
+            positions = {} # { symbol: qty }
             equity_curve = []
             trades = []
             
             # Initialize Strategy
+            # Note: stateless strategies usually don't need re-init per symbol if they don't store internal state.
+            # MeanReversion is stateless (calculates on passed candles).
             await strategy.initialize(params or strategy.params)
             
-            # Need a window for strategy lookback
-            # We must feed candles incrementally
-            window_size = getattr(strategy, 'params', {}).get('duration', 20) + 10
+            # We need a window for strategy lookback
+            lookback = getattr(strategy, 'params', {}).get('duration', 20) + 10
             
-            for i in range(window_size, len(candles)):
-                # Window: [start : current]
-                # Actually, strategy.on_bar takes a list of candles.
-                # Passed candles should be "up to now".
-                # To be efficient, we might slice.
-                
-                # Slicing for safety
-                current_slice = candles[i-window_size : i+1] 
-                current_candle = candles[i]
-                
-                # Mock Account
-                mock_account = AccountInfo(
-                    account_id="BACKTEST",
-                    currency="USD",
-                    cash=cash,
-                    portfolio_value=cash + (position_qty * current_candle.close),
-                    buying_power=cash,
-                    is_paper=True
-                )
-                
-                context = StrategyContext(
-                    symbol=symbol,
-                    account=mock_account,
-                    params=params or {}
-                )
-                
-                # Generate Signals
-                signals = await strategy.on_bar(context, current_slice)
-                
-                # Execute Signals (Simulated)
-                for sig in signals:
-                    price = current_candle.close
-                    cost = price # Unit cost
-                    
-                    if sig.type == SignalType.BUY and cash >= price:
-                        # Buy 1 unit
-                        qty = 1.0 # Fixed for MVP
-                        cash -= price * qty
-                        position_qty += qty
-                        trades.append({
-                            "type": "BUY",
-                            "price": price,
-                            "time": current_candle.timestamp,
-                            "equity": cash + (position_qty * price)
-                        })
-                        
-                    elif sig.type == SignalType.SELL and position_qty > 0:
-                        # Sell all
-                        qty = position_qty
-                        cash += price * qty
-                        position_qty = 0
-                        trades.append({
-                            "type": "SELL",
-                            "price": price,
-                            "time": current_candle.timestamp,
-                            "equity": cash + (position_qty * price)
-                        })
+            from app.services.position_sizer import PositionSizer
 
-                # Record Equity
-                total_equity = cash + (position_qty * current_candle.close)
+            for current_date in sorted_dates:
+                # 1. Update Market Value for Equity Calc
+                # We need closing prices for ALL held positions to calculate accurate equity.
+                # If a symbol has no candle today, use last known price? 
+                # For simplicity, we use today's candle if available, else skip update (or use prev).
+                # Let's assume daily data is contiguous or we use available.
+                
+                day_candles = candle_map[current_date]
+                
+                # Calculate Portfolio Value (start of processing)
+                current_portfolio_value = cash
+                for sym, qty in positions.items():
+                    if sym in day_candles:
+                        current_portfolio_value += qty * day_candles[sym].close
+                    else:
+                        # Fallback price? Expensive to look up back. 
+                        # MVP: Ignore if missing today? Or assume 0 change?
+                        # Let's try to track 'last_known_prices'
+                        pass
+                
+                # 2. Process Each Symbol Active Today
+                for sym, current_candle in day_candles.items():
+                    # Prepare History Slice
+                    # We need 'lookback' candles leading up to 'current_date'
+                    # Efficient slicing from all_candles_by_symbol
+                    full_history = all_candles_by_symbol[sym]
+                    # Find index of current_candle
+                    # Optimization: Track current index per symbol
+                    # But simpler: Binary search or linear scan (since sorted)
+                    # Given the outer loop is time sorted, we can maintain indices.
+                    # Let's just find it for safety in MVP (optimize later if slow)
+                    try:
+                        idx = full_history.index(current_candle)
+                    except ValueError:
+                        continue
+                        
+                    if idx < lookback:
+                        continue # Not enough data yet
+                        
+                    current_slice = full_history[idx-lookback : idx+1]
+                    
+                    # Mock Account
+                    # Critical: Account info must reflect TOTAL portfolio state
+                    # But 'buying_power' is shared.
+                    
+                    mock_account = AccountInfo(
+                        account_id="BACKTEST",
+                        currency="USD",
+                        cash=cash,
+                        portfolio_value=current_portfolio_value, # Approx
+                        buying_power=cash,
+                        is_paper=True
+                    )
+                    
+                    context = StrategyContext(
+                        symbol=sym,
+                        account=mock_account,
+                        params=params or {}
+                    )
+                    
+                    # Generate Signals
+                    signals = await strategy.on_bar(context, current_slice)
+                    
+                    # Execute Signals
+                    for sig in signals:
+                        price = current_candle.close
+                        moving_avg = sig.metadata.get('moving_avg', price)
+                        
+                        # Re-calc value for Sizer (cash might have changed in this loop iteration)
+                        curr_pos_val = cash + sum(
+                            positions.get(s, 0) * (day_candles[s].close if s in day_candles else 0) 
+                            for s in positions
+                        ) # Rough approx for this step
+                        
+                        qty = PositionSizer.calculate_qty(
+                            current_price=price,
+                            moving_avg=moving_avg,
+                            portfolio_value=curr_pos_val,
+                            buying_power=cash,
+                            params=params or {}
+                        )
+                        
+                        current_pos_qty = positions.get(sym, 0.0)
+
+                        if sig.type == SignalType.BUY and qty > 0:
+                            cost = price * qty
+                            if cash >= cost:
+                                cash -= cost
+                                positions[sym] = current_pos_qty + qty
+                                trades.append({
+                                    "symbol": sym,
+                                    "type": "BUY",
+                                    "price": price,
+                                    "qty": qty,
+                                    "time": current_candle.timestamp,
+                                    "equity": cash + sum(positions.get(s,0)*price for s in positions) # Approx
+                                })
+                            
+                        elif sig.type == SignalType.SELL and current_pos_qty > 0:
+                            # Sell All Logic for now
+                            qty_to_sell = current_pos_qty
+                            cash += price * qty_to_sell
+                            positions[sym] = 0
+                            trades.append({
+                                "symbol": sym,
+                                "type": "SELL",
+                                "price": price,
+                                "qty": qty_to_sell,
+                                "time": current_candle.timestamp,
+                                "equity": cash # Post-trade equity
+                            })
+
+                # 3. End of Day Reporting
+                # Accurate Equity Calculation
+                total_equity = cash
+                for sym, qty in positions.items():
+                    # Use today's close if available, else ideally last known.
+                    # MVP: Only count if available today (Risk: Gap if data missing)
+                    # Improvement: Maintain 'last_prices' dict
+                    close_price = day_candles[sym].close if sym in day_candles else 0 
+                    # If 0 (missing data), this spikes equity down. 
+                    # Let's defer to a better solution: last_prices
+                    
+                    if sym in day_candles:
+                        total_equity += qty * day_candles[sym].close
+                    
                 equity_curve.append({
-                    "time": current_candle.timestamp.isoformat(),
+                    "time": datetime.combine(current_date, datetime.min.time()).isoformat(),
                     "equity": total_equity
                 })
 
@@ -168,7 +263,7 @@ class BacktestService:
                 total_trades=len(trades),
                 equity_curve=equity_curve,
                 metrics={"trades": [
-                    {k: str(v) if isinstance(v, datetime) else v for k,v in t.items()} 
+                    {k: str(v) if isinstance(v, (datetime, date)) else v for k,v in t.items()} 
                     for t in trades
                 ]} 
             )

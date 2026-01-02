@@ -92,16 +92,47 @@ class ExecutionService:
         await db.commit()
 
     def _calculate_quantity(self, signal: StrategySignal, account: AccountInfo) -> float:
-        # Simple Logic: Buy 1 unit. 
-        # TODO: Implement proper position sizing based on portfolio value & signal strength
-        return 1.0
+        # Calculate Moving Average (Need historical data here?)
+        # For now, we rely on metadata passed in the signal or we fetch it.
+        # But wait, signal generation usually has access to indicators. 
+        # Ideally, Signal object should contain indicators or context.
+        # Let's assume signal.metadata has 'moving_avg' and 'current_price' derived from strategy. 
+        # If not, we might need to fetch. 
+        
+        # NOTE: In mean_reversion.py, we put metadata={'max_price':..., 'drop_pct':...}.
+        # We need to ensure Strategy passes 'moving_avg' and 'current_price'.
+        
+        # Fallback to 1.0 if missing data for now, but really we should fix Strategy to pass this.
+        from app.services.position_sizer import PositionSizer
+        
+        # Extract from metadata
+        current_price = signal.metadata.get('current_price', 0.0)
+        moving_avg = signal.metadata.get('moving_avg', current_price) # avoid zero div if missing
+        
+        if current_price == 0:
+            return 0.0 
+            
+        params = {
+            'max_position_pct': 0.20, # Default risk
+            'scale_factor': 200.0     # AT_V0 default
+        }
+        
+        qty = PositionSizer.calculate_qty(
+            current_price=current_price,
+            moving_avg=moving_avg,
+            portfolio_value=account.portfolio_value,
+            buying_power=account.buying_power,
+            params=params
+        )
+        
+        return qty
 
     async def _log_signal(self, db: AsyncSession, signal: StrategySignal):
         log = SignalLog(
-            strategy_name="Unknown", # Should pass strategy name in context
+            strategy_name="MeanReversion_v1", # Hardcoded or passed from context
             symbol=signal.symbol,
-            signal_type=signal.signal_type.name, # Enum to str
-            signal_strength=signal.confidence, # corrected field name
-            raw_data={"rationale": signal.metadata.get("reason")} # access metadata
+            signal_type=signal.signal_type.name,
+            signal_strength=signal.confidence,
+            raw_data=signal.metadata
         )
         db.add(log)

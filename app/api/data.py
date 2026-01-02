@@ -111,6 +111,29 @@ async def deactivate_symbol(ticker: str, db: AsyncSession = Depends(get_db)):
     
     return {"message": f"Symbol {ticker} deactivated"}
 
+@router.get("/candles/check-availability", response_model=List[str])
+async def check_data_availability(
+    symbols: str, # Comma separated
+    start_date: date,
+    end_date: date,
+    timeframe: str = "1d",
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Check availability of candle data for symbols.
+    Returns list of symbols that are MISSING data.
+    """
+    data_service = DataService(db)
+    symbol_list = [s.strip() for s in symbols.split(',') if s.strip()]
+    
+    missing_symbols = await data_service.check_data_availability(
+        symbols=symbol_list,
+        start_date=start_date,
+        end_date=end_date,
+        timeframe=timeframe
+    )
+    return missing_symbols
+
 @router.get("/candles/{symbol}", response_model=List[CandleResponse])
 async def get_candles(
     symbol: str,

@@ -148,3 +148,41 @@ class DataService:
             self.db.add(log)
             await self.db.commit()
             raise
+
+    async def check_data_availability(
+        self,
+        symbols: List[str],
+        start_date: date,
+        end_date: date,
+        timeframe: str = "1d"
+    ) -> List[str]:
+        """
+        Check if data exists for valid trading days within the range.
+        Returns a list of symbols that are missing data.
+        
+        Note: This is a simplified check. It checks if ANY data exists in the range.
+        For stricter checking, we should count expected trading days vs actual candles.
+        """
+        missing_symbols = []
+        
+        for sym in symbols:
+            # Simple check: do we have at least one candle in the range?
+            # Or better: do we have candles covering > 50% of days?
+            # Let's check if we have ANY data first.
+            
+            stmt = select(Candle).where(
+                and_(
+                    Candle.symbol == sym,
+                    Candle.timeframe == timeframe,
+                    Candle.timestamp >= start_date,
+                    Candle.timestamp <= end_date
+                )
+            ).limit(1)
+            
+            result = await self.db.execute(stmt)
+            exists = result.scalar_one_or_none()
+            
+            if not exists:
+                missing_symbols.append(sym)
+                
+        return missing_symbols

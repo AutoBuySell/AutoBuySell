@@ -34,6 +34,11 @@ class Strategy(Protocol):
     def name(self) -> str:
         ...
 
+    @property
+    def timeframe(self) -> str:
+        """The preferred timeframe for this strategy (e.g., '1d', '30Min', '1Min')"""
+        ...
+
     async def initialize(self, params: Dict[str, Any]):
         """Called once when strategy is loaded."""
         ...
