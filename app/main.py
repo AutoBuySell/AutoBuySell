@@ -11,6 +11,15 @@ from app.services.execution import ExecutionService
 from app.services.risk import RiskManager
 from app.services.trading import TradingService
 
+import logging
+
+# Configure logging with timestamp
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup: Create tables

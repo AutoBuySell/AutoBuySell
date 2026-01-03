@@ -83,23 +83,31 @@ class TradingService:
     async def start(self, persist: bool = True):
         """Start the trading loop"""
         if self.is_running:
+            logger.info("Trading service already running")
             return
         
+        logger.info("Starting scheduler...")
         self.scheduler.start()
+        logger.info(f"Scheduler running: {self.scheduler.running}")
+        logger.info(f"Scheduler state: {self.scheduler.state}")
+        
         self.job_id = self.scheduler.add_job(
             self.run_cycle,
             IntervalTrigger(minutes=1),
             id="trading_cycle",
             replace_existing=True
         )
+        logger.info(f"Trading cycle job added: {self.job_id}")
+        logger.info(f"Active jobs: {[job.id for job in self.scheduler.get_jobs()]}")
         
         # Add trade sync job (every hour)
-        self.scheduler.add_job(
+        sync_job = self.scheduler.add_job(
             self._sync_trades_job,
             IntervalTrigger(hours=1),
             id="sync_trades",
             replace_existing=True
         )
+        logger.info(f"Sync trades job added: {sync_job}")
         
         self.is_running = True
         
@@ -107,7 +115,7 @@ class TradingService:
             await self._save_state(STATE_KEY_IS_RUNNING, "true")
             await self._save_state(STATE_KEY_ACTIVE_STRATEGY, self.active_strategy_name)
         
-        logger.info("Trading service started")
+        logger.info("Trading service started successfully")
 
     async def stop(self, persist: bool = True):
         """Stop the trading loop"""
@@ -141,11 +149,13 @@ class TradingService:
 
     async def run_cycle(self):
         """One trading cycle"""
-        logger.info("Starting trading cycle")
+        logger.info("=== TRADING CYCLE STARTED ===")
         async with AsyncSessionLocal() as db:
             try:
                 # 0. Check Market Status
-                if not await self.broker.get_market_status():
+                market_open = await self.broker.get_market_status()
+                logger.info(f"Market status: {'OPEN' if market_open else 'CLOSED'}")
+                if not market_open:
                     logger.info("Market is closed. Skipping cycle.")
                     return
 
