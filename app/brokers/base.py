@@ -41,6 +41,17 @@ class PortfolioHistory(BaseModel):
     profit_loss_pct: List[float]
     timeframe: str
 
+class TradeFill(BaseModel):
+    """Trade fill data from broker"""
+    execution_id: str
+    order_id: Optional[str]
+    symbol: str
+    side: str  # 'buy' or 'sell'
+    qty: float
+    price: float
+    commission: float  # 0.0 if not available from broker (Retail API)
+    executed_at: datetime
+
 class BrokerAdapter(Protocol):
     """
     Interface for interacting with different brokerage APIs (e.g., Alpaca).
@@ -73,4 +84,8 @@ class BrokerAdapter(Protocol):
 
     async def get_portfolio_history(self, period: str = "1M", timeframe: str = "1D") -> PortfolioHistory:
         """Fetch portfolio equity history."""
+        ...
+
+    async def get_trade_fills(self, limit: int = 100) -> List['TradeFill']:
+        """Fetch recent trade fill activities."""
         ...

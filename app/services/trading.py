@@ -92,6 +92,15 @@ class TradingService:
             id="trading_cycle",
             replace_existing=True
         )
+        
+        # Add trade sync job (every hour)
+        self.scheduler.add_job(
+            self._sync_trades_job,
+            IntervalTrigger(hours=1),
+            id="sync_trades",
+            replace_existing=True
+        )
+        
         self.is_running = True
         
         if persist:
@@ -259,6 +268,59 @@ class TradingService:
             
         except Exception as e:
             logger.error(f"Failed to sync positions: {e}")
+
+    async def _sync_trades_job(self):
+        """Wrapper for sync_trades to be called by scheduler"""
+        async with AsyncSessionLocal() as db:
+            await self.sync_trades(db)
+
+    async def sync_trades(self, db: AsyncSession):
+        """
+        Sync trade fills from broker to DB.
+        Called periodically (every 1 hour) to capture all fills.
+        """
+        try:
+            from app.domain.models import Trade, Order
+            
+            logger.info("Starting trade sync from broker...")
+            fills = await self.broker.get_trade_fills(limit=100)
+            
+            synced_count = 0
+            for fill in fills:
+                # Check if already recorded (by execution_id)
+                existing = await db.execute(
+                    select(Trade).where(Trade.execution_id == fill.execution_id)
+                )
+                if existing.scalar_one_or_none():
+                    continue  # Already synced
+                    
+                # Find associated order (optional)
+                order = None
+                if fill.order_id:
+                    order_result = await db.execute(
+                        select(Order).where(Order.broker_order_id == fill.order_id)
+                    )
+                    order = order_result.scalar_one_or_none()
+                
+                # Create trade record
+                trade = Trade(
+                    order_id=order.id if order else None,
+                    symbol=fill.symbol,
+                    side=fill.side,
+                    qty=fill.qty,
+                    price=fill.price,
+                    commission=fill.commission,  # 0.0 for retail
+                    execution_id=fill.execution_id,
+                    created_at=fill.executed_at
+                )
+                db.add(trade)
+                synced_count += 1
+            
+            await db.commit()
+            logger.info(f"Trade sync completed: {synced_count} new trades recorded")
+            
+        except Exception as e:
+            logger.error(f"Failed to sync trades: {e}")
 
     def _prioritize_signals(self, signals: List[StrategySignal]) -> List[StrategySignal]:
         """

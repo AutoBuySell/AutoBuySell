@@ -156,3 +156,55 @@ class AlpacaBroker(BrokerAdapter):
             profit_loss_pct=list(history.profit_loss_pct) if history.profit_loss_pct else [],
             timeframe=timeframe
         )
+
+    async def get_trade_fills(self, limit: int = 100) -> List[Any]:
+        """
+        Get trade fill activities from Alpaca.
+        Note: Trading API (Retail) does NOT include commission field in response.
+        Commission will be 0.0 for retail accounts.
+        Broker API might include commission - we check for the attribute.
+        """
+        from alpaca.trading.requests import GetAccountActivitiesRequest
+        from alpaca.trading.enums import ActivityType
+        from app.brokers.base import TradeFill
+        
+        request = GetAccountActivitiesRequest(
+            activity_types=[ActivityType.FILL],
+            page_size=limit
+        )
+        
+        try:
+            activities = self.trading_client.get_account_activities(request)
+        except Exception as e:
+            # Log error and return empty list
+            print(f"Error fetching trade fills: {e}")
+            return []
+        
+        fills = []
+        for act in activities:
+            # Commission: Trading API doesn't include this field
+            # Broker API might include it - check for attribute
+            commission = getattr(act, 'commission', None)
+            if commission is None:
+                commission = 0.0  # Retail accounts: commission-free
+            else:
+                commission = float(commission)
+            
+            # Extract order_id if available
+            order_id = None
+            if hasattr(act, 'order_id') and act.order_id:
+                order_id = str(act.order_id)
+                
+            fills.append(TradeFill(
+                execution_id=str(act.id),
+                order_id=order_id,
+                symbol=str(act.symbol),
+                side=str(act.side).lower(),
+                qty=float(act.qty),
+                price=float(act.price),
+                commission=commission,
+                executed_at=act.transaction_time
+            ))
+        
+        return fills
+

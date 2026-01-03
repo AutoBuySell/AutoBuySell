@@ -116,13 +116,14 @@ async def get_equity_performance(
             if t_date < start_date_date:
                 # Update state
                 if t.side == 'buy':
-                    total_cost = (current_qty * avg_cost) + (t.qty * t.price)
+                    # Include commission in initial cost basis
+                    total_cost = (current_qty * avg_cost) + (t.qty * t.price) + t.commission
                     current_qty += t.qty
                     if current_qty > 0:
                         avg_cost = total_cost / current_qty
                 elif t.side == 'sell':
-                    # Realized P/L
-                    pl = (t.price - avg_cost) * t.qty
+                    # Realized P/L with commission
+                    pl = (t.price - avg_cost) * t.qty - t.commission
                     realized_pl_cum += pl
                     current_qty -= t.qty
                     if current_qty <= 0:
@@ -171,15 +172,17 @@ async def get_equity_performance(
             if t_date > c_date:
                 break
                 
-            # Apply Trade
+            # Apply Trade (with commission)
             if t.side == 'buy':
-                total_val = (curr_qty * curr_avg_cost) + (t.qty * t.price)
+                # Include commission in cost basis
+                total_val = (curr_qty * curr_avg_cost) + (t.qty * t.price) + t.commission
                 curr_qty += t.qty
                 if curr_qty > 0:
                     curr_avg_cost = total_val / curr_qty
             elif t.side == 'sell':
+                # Subtract commission from realized income
                 qty_sold = min(t.qty, curr_qty)
-                pl = (t.price - curr_avg_cost) * qty_sold
+                pl = (t.price - curr_avg_cost) * qty_sold - t.commission
                 curr_realized += pl
                 curr_qty -= qty_sold
                 if curr_qty <= 0:
