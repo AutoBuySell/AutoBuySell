@@ -101,30 +101,43 @@ class AlpacaBroker(BrokerAdapter):
         # But wait, __init__ is synchronous. 
         from alpaca.data.historical import StockHistoricalDataClient
         from alpaca.data.requests import StockLatestBarRequest, StockBarsRequest
-        from alpaca.data.timeframe import TimeFrame
+        from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
         
         client = StockHistoricalDataClient(
             api_key=settings.ALPACA_API_KEY,
             secret_key=settings.ALPACA_SECRET_KEY
         )
 
+        # Normalize timeframe (case-insensitive)
+        tf_normalized = timeframe.lower()
+        
+        # Map to Alpaca TimeFrame objects
         tf_map = {
-            "1m": TimeFrame.Minute,
-            "5m": TimeFrame(5, "Min"),
-            "15m": TimeFrame(15, "Min"),
-            "1h": TimeFrame.Hour,
-            "1d": TimeFrame.Day
+            "1min": TimeFrame(1, TimeFrameUnit.Minute),
+            "5min": TimeFrame(5, TimeFrameUnit.Minute),
+            "15min": TimeFrame(15, TimeFrameUnit.Minute),
+            "30min": TimeFrame(30, TimeFrameUnit.Minute),
+            "1hour": TimeFrame(1, TimeFrameUnit.Hour),
+            "1day": TimeFrame(1, TimeFrameUnit.Day),
+            # Legacy formats
+            "1m": TimeFrame(1, TimeFrameUnit.Minute),
+            "5m": TimeFrame(5, TimeFrameUnit.Minute),
+            "15m": TimeFrame(15, TimeFrameUnit.Minute),
+            "30m": TimeFrame(30, TimeFrameUnit.Minute),
+            "1h": TimeFrame(1, TimeFrameUnit.Hour),
+            "1d": TimeFrame(1, TimeFrameUnit.Day)
         }
-        alpaca_tf = tf_map.get(timeframe, TimeFrame.Day)
+        
+        alpaca_tf = tf_map.get(tf_normalized, TimeFrame(1, TimeFrameUnit.Day))  # Default to 1Day
         
         # Calculate start time roughly based on limit
         # This is tricky for exact "last N bars", but we can fetch a bit more and slice.
         # For '1d', 100 days ago.
         from datetime import datetime, timedelta
-        if timeframe == "1d":
+        if tf_normalized in ["1day", "1d"]:
             start = datetime.now() - timedelta(days=limit * 2) 
         else:
-            start = datetime.now() - timedelta(days=5) # fallback
+            start = datetime.now() - timedelta(days=7) # fallback
             
         req = StockBarsRequest(
             symbol_or_symbols=symbol,

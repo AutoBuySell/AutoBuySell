@@ -116,7 +116,7 @@ async def check_data_availability(
     symbols: str, # Comma separated
     start_date: date,
     end_date: date,
-    timeframe: str = "1d",
+    timeframe: str,
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -137,7 +137,7 @@ async def check_data_availability(
 @router.get("/candles/{symbol}", response_model=List[CandleResponse])
 async def get_candles(
     symbol: str,
-    timeframe: str = "1d",
+    timeframe: str,
     start: datetime | None = None,
     end: datetime | None = None,
     limit: int = 100,
