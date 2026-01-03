@@ -4,15 +4,14 @@ import { useEffect, useState } from 'react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { logApi } from '@/lib/api';
 
-export default function Transactions({ limit = 50 }: { limit?: number }) {
+export default function Transactions({ limit = 50, refreshTrigger }: { limit?: number, refreshTrigger?: number }) {
     const [trades, setTrades] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
         loadTrades();
-        const interval = setInterval(loadTrades, 15000);
-        return () => clearInterval(interval);
-    }, []);
+        // No auto-polling - parent controls refresh
+    }, [refreshTrigger]);
 
     const loadTrades = async () => {
         try {

@@ -46,8 +46,7 @@ export default function LogPage() {
 
     useEffect(() => {
         loadData();
-        const interval = setInterval(loadData, 10000);
-        return () => clearInterval(interval);
+        // No auto-polling - use Refresh button
     }, [activeTab]);
 
     const loadData = async () => {

@@ -136,8 +136,7 @@ function SystemStatusCard() {
 
     useEffect(() => {
         refreshStatus();
-        const interval = setInterval(refreshStatus, 5000);
-        return () => clearInterval(interval);
+        // No auto-polling - user controls refresh
     }, []);
 
     const refreshStatus = async () => {
@@ -203,6 +202,13 @@ function SystemStatusCard() {
                         <p className="text-xs text-muted-foreground mt-1">Stop trading to change strategy</p>
                     )}
                 </div>
+
+                <button
+                    onClick={refreshStatus}
+                    className="mt-2 w-full py-1 px-3 rounded text-xs bg-secondary text-secondary-foreground hover:bg-secondary/80"
+                >
+                    Refresh Status
+                </button>
 
                 <button 
                     onClick={toggleTrading}

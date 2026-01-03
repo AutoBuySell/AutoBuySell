@@ -7,15 +7,14 @@ import {
     BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell 
 } from 'recharts';
 
-export default function NominalIncomes() {
+export default function NominalIncomes({ refreshTrigger }: { refreshTrigger?: number }) {
     const [data, setData] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
         loadData();
-        const interval = setInterval(loadData, 10000); // 10s refresh
-        return () => clearInterval(interval);
-    }, []);
+        // No auto-polling - parent controls refresh
+    }, [refreshTrigger]);
 
     const loadData = async () => {
         try {

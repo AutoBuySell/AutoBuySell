@@ -192,7 +192,7 @@ export const backtestApi = {
 
 export const logApi = {
     getLogs: async (limit: number = 100) => {
-        const { data } = await apiClient.get<LogEntry[]>('/logs', { params: { limit } });
+        const { data } = await apiClient.get<LogEntry[]>('/logs/', { params: { limit } });
         return data;
     },
     getTrades: async (limit: number = 100, symbol?: string) => {

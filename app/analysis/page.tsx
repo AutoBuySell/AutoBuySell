@@ -42,6 +42,10 @@ export default function AnalysisPage() {
   const [showDownloadModal, setShowDownloadModal] = useState(false);
   const [missingSymbolsForDownload, setMissingSymbolsForDownload] = useState<string[]>([]);
   const [pendingSymbolsList, setPendingSymbolsList] = useState<string[]>([]);
+  
+  // -- Live Tab State --
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
+
 
   // -- Live Analysis State --
   const [history, setHistory] = useState<PortfolioHistory | null>(null);
@@ -67,10 +71,8 @@ export default function AnalysisPage() {
         }
     });
     
-    // Fallback polling every 2 minutes (WebSocket is primary)
-    const interval = setInterval(loadRuns, 120000);
+    // No fallback polling - WebSocket handles updates
     return () => {
-        clearInterval(interval);
         unsubscribe();
     };
   }, []);
@@ -242,7 +244,16 @@ export default function AnalysisPage() {
     <div className="space-y-6">
       <div className="flex justify-between items-center">
           <h1 className="text-3xl font-bold">Analysis</h1>
-          <div className="flex bg-muted rounded p-1">
+          <div className="flex items-center gap-2">
+              {activeTab === 'live' && (
+                  <button
+                      onClick={() => setRefreshTrigger(prev => prev + 1)}
+                      className="px-3 py-1.5 bg-secondary text-secondary-foreground hover:bg-secondary/80 rounded text-sm"
+                  >
+                      Refresh Data
+                  </button>
+              )}
+              <div className="flex bg-muted rounded p-1">
               {(['live', 'backtest'] as Tab[]).map(tab => (
                   <button
                       key={tab}
@@ -256,6 +267,7 @@ export default function AnalysisPage() {
                       {tab}
                   </button>
               ))}
+          </div>
           </div>
       </div>
       
@@ -540,7 +552,7 @@ export default function AnalysisPage() {
                   </Card>
     
                   {/* Nominal Incomes Bar Chart */}
-                  <NominalIncomes />
+                  <NominalIncomes refreshTrigger={refreshTrigger} />
               </div>
 
               {/* Middle Row: Each Equity Performance & Pie Chart */}
@@ -588,7 +600,7 @@ export default function AnalysisPage() {
               {/* Bottom Row: Transactions & Asset List */}
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                   <div className="lg:col-span-2">
-                       <Transactions limit={20} />
+                       <Transactions limit={20} refreshTrigger={refreshTrigger} />
                   </div>
                   
                   {/* Small Asset Allocation List */}
