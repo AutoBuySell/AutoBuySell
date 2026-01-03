@@ -49,6 +49,23 @@ class Candle(Base):
     close: Mapped[float] = mapped_column(Float)
     volume: Mapped[float] = mapped_column(Float)
 
+class DataDownloadRecord(TimeStampedBase):
+    """
+    Tracks downloaded data ranges for each symbol/timeframe combination.
+    Used to determine what data needs to be downloaded vs what already exists.
+    Multiple non-overlapping ranges can exist per symbol/timeframe.
+    When a new download covers existing ranges, merge into single record.
+    """
+    __tablename__ = "data_download_records"
+    __table_args__ = (
+        Index("idx_download_records_symbol_tf", "symbol", "timeframe"),
+    )
+    
+    symbol: Mapped[str] = mapped_column(String(20), index=True)
+    timeframe: Mapped[str] = mapped_column(String(10))
+    start_date: Mapped[date] = mapped_column(DateTime(timezone=False).with_variant(DateTime, "postgresql"))
+    end_date: Mapped[date] = mapped_column(DateTime(timezone=False).with_variant(DateTime, "postgresql"))
+
 # --- Configuration & Strategies ---
 
 class StrategyMeta(TimeStampedBase):

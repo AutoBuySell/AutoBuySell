@@ -34,7 +34,7 @@ class DownloadRequest(BaseModel):
     symbols: List[str]
     start_date: date
     end_date: date
-    timeframe: str = "1d"
+    timeframe: str  # Required, no default
 
 @router.get("/symbols", response_model=List[SymbolResponse])
 async def list_symbols(active_only: bool = True, db: AsyncSession = Depends(get_db)):
@@ -201,7 +201,7 @@ class BatchDownloadRequest(BaseModel):
     symbols: List[str]
     start_date: date
     end_date: date
-    timeframes: List[str] = ["1d", "1h", "30m", "15m"]
+    timeframes: List[str]  # Required, no default
 
 @router.post("/candles/batch-download")
 async def batch_download_historical_data(

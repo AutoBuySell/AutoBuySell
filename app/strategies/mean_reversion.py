@@ -96,9 +96,12 @@ class MeanReversionStrategy(Strategy):
                     "max_price": float(max_price),
                     "drop_pct": float(1 - current_price/max_price),
                     "current_price": float(current_price),
-                    # moving_avg is roughly the mean of window? 
-                    # AT_V0 logic used simple average of last 20 close prices.
-                    "moving_avg": float(np.mean(reference_window))
+                    "moving_avg": float(np.mean(reference_window)),
+                    # Pass strategy params for position sizing
+                    "max_position_pct": self.params.get("max_position_pct", 0.20),
+                    "scale_factor": self.params.get("scale_factor", 200.0),
+                    "target_value": self.params.get("target_value", 1000.0),
+                    "limit": self.params.get("limit", 1000.0)
                 }
             ))
 
@@ -126,7 +129,12 @@ class MeanReversionStrategy(Strategy):
                     "min_price": float(min_price),
                     "rise_pct": float(current_price/min_price - 1),
                     "current_price": float(current_price),
-                    "moving_avg": float(np.mean(reference_window))
+                    "moving_avg": float(np.mean(reference_window)),
+                    # Pass strategy params for position sizing
+                    "max_position_pct": self.params.get("max_position_pct", 0.20),
+                    "scale_factor": self.params.get("scale_factor", 200.0),
+                    "target_value": self.params.get("target_value", 1000.0),
+                    "limit": self.params.get("limit", 1000.0)
                 }
             ))
             

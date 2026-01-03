@@ -49,6 +49,24 @@ async def stop_trading(request: Request):
         "status": service.get_status()
     }
 
+class StrategyRequest(BaseModel):
+    strategy_name: str
+
+@router.put("/strategy")
+async def set_active_strategy(req: StrategyRequest, request: Request):
+    """Set the active trading strategy"""
+    service: TradingService = request.app.state.trading_service
+    success = service.set_active_strategy(req.strategy_name)
+    if not success:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Strategy '{req.strategy_name}' not found. Available: {list(service.strategies.keys())}"
+        )
+    return {
+        "message": f"Active strategy set to {req.strategy_name}",
+        "status": service.get_status()
+    }
+
 # Existing endpoints ... (Account, Positions, Manual Order)
 from app.brokers.base import AccountInfo, BrokerPosition, OrderResult, OrderRequest as BrokerOrderReq
 

@@ -25,10 +25,13 @@ class TradingService:
         self.is_running = False
         self.job_id = None
         
-        # Registry
+        # Registry of available strategies
         self.strategies = {
             "MeanReversion_v1": MeanReversionStrategy()
         }
+        
+        # Active strategy (can be changed via API)
+        self.active_strategy_name = "MeanReversion_v1"
 
     async def start(self):
         """Start the trading loop"""
@@ -57,8 +60,18 @@ class TradingService:
     def get_status(self) -> dict:
         return {
             "is_running": self.is_running,
-            "next_run": str(self.scheduler.get_job("trading_cycle").next_run_time) if self.is_running and self.scheduler.get_job("trading_cycle") else None
+            "next_run": str(self.scheduler.get_job("trading_cycle").next_run_time) if self.is_running and self.scheduler.get_job("trading_cycle") else None,
+            "active_strategy": self.active_strategy_name,
+            "available_strategies": list(self.strategies.keys())
         }
+    
+    def set_active_strategy(self, strategy_name: str) -> bool:
+        """Set the active strategy. Returns True if successful."""
+        if strategy_name not in self.strategies:
+            return False
+        self.active_strategy_name = strategy_name
+        logger.info(f"Active strategy changed to: {strategy_name}")
+        return True
 
     async def run_cycle(self):
         """One trading cycle"""
@@ -79,8 +92,8 @@ class TradingService:
                 account = await self.broker.get_account_info()
                 await self.sync_positions(db)
                 
-                # 3. Strategy Config
-                strategy_name = "MeanReversion_v1"
+                # 3. Strategy Config (use active strategy)
+                strategy_name = self.active_strategy_name
                 strategy = self.strategies.get(strategy_name)
                 
                 # Fetch Default Params
@@ -195,7 +208,9 @@ class TradingService:
         try:
             # Fetch Data
             # Note: Strategy needs 'duration' + extra for calculations.
-            limit = strategy.params.get("duration", 20) + 10
+            duration = strategy.params.get("duration", 20)
+            candle_buffer = strategy.params.get("candle_buffer", 10)
+            limit = duration + candle_buffer
             
             # Fetch from Broker (Alpaca)
             # Use strategy's configured timeframe

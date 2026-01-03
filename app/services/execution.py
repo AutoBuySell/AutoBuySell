@@ -46,11 +46,15 @@ class ExecutionService:
                 )
 
                 # Fetch current price estimate (for risk check)
-                # In real impl, broker.get_last_price(symbol)
-                price_estimate = 100.0 # MOCK
+                # Use the current_price from signal metadata (already fetched by strategy)
+                price_estimate = signal.metadata.get('current_price', 0.0)
+                
+                if price_estimate == 0.0:
+                    logger.warning(f"No current_price in signal metadata for {signal.symbol}, skipping")
+                    continue
 
                 # 2. Risk Validation
-                await self.risk.validate_order(self.db, account, order_req, price_estimate)
+                await self.risk.validate_order(db, account, order_req, price_estimate)
 
                 # 3. Submit to Broker
                 result = await self.broker.submit_order(order_req)
@@ -112,9 +116,13 @@ class ExecutionService:
         if current_price == 0:
             return 0.0 
             
+        # Get params from signal metadata (passed from strategy)
+        # Strategy should include these in signal metadata
         params = {
-            'max_position_pct': 0.20, # Default risk
-            'scale_factor': 200.0     # AT_V0 default
+            'max_position_pct': signal.metadata.get('max_position_pct', 0.20),
+            'scale_factor': signal.metadata.get('scale_factor', 200.0),
+            'target_value': signal.metadata.get('target_value', 1000.0),
+            'limit': signal.metadata.get('limit', 1000.0)
         }
         
         qty = PositionSizer.calculate_qty(

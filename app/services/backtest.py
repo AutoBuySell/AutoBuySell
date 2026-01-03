@@ -73,7 +73,24 @@ class BacktestService:
         await self.db.refresh(run_record)
         
         try:
-            # 3. Load Data for ALL symbols
+            # 3. Download Data for ALL symbols (ensures complete coverage for period)
+            # DataService handles deduplication via upsert
+            logger.info(f"Downloading data for backtest period: {symbols} from {start_date} to {end_date}")
+            from app.services.data import DataService
+            data_service = DataService(self.db)
+            
+            try:
+                await data_service.download_historical(
+                    symbols=symbols,
+                    start_date=start_date,
+                    end_date=end_date,
+                    timeframe=strategy.timeframe
+                )
+                logger.info("Data download completed.")
+            except Exception as download_err:
+                logger.warning(f"Data download failed (will try with existing data): {download_err}")
+            
+            # 4. Load Data for ALL symbols
             # We need to fetch candles for each symbol and align them by time.
             candle_map = {} # { date: { symbol: Candle } }
             all_candles_by_symbol = {} # { symbol: [Candle] } for history slicing
@@ -99,9 +116,9 @@ class BacktestService:
                     candle_map[d][sym] = c
 
             if not candle_map:
-                raise ValueError("No data found for backtest range for any symbol")
+                raise ValueError(f"No data available for {symbols} ({strategy.timeframe}) from {start_date} to {end_date}")
 
-            # 4. Simulation Loop (Time-Synchronized)
+            # 5. Simulation Loop (Time-Synchronized)
             sorted_dates = sorted(candle_map.keys())
             
             cash = initial_capital
@@ -185,23 +202,32 @@ class BacktestService:
                     # Execute Signals
                     for sig in signals:
                         price = current_candle.close
-                        moving_avg = sig.metadata.get('moving_avg', price)
                         
-                        # Re-calc value for Sizer (cash might have changed in this loop iteration)
-                        curr_pos_val = cash + sum(
-                            positions.get(s, 0) * (day_candles[s].close if s in day_candles else 0) 
-                            for s in positions
-                        ) # Rough approx for this step
+                        # Re-calc current position value for Sizer
+                        current_pos_qty = positions.get(sym, 0.0)
+                        current_pos_value = current_pos_qty * price
+                        
+                        # Use params from signal metadata (same as live trading)
+                        sizer_params = {
+                            'max_position_pct': sig.metadata.get('max_position_pct', 0.20),
+                            'scale_factor': sig.metadata.get('scale_factor', 200.0),
+                            'target_value': sig.metadata.get('target_value', 1000.0),
+                            'limit': sig.metadata.get('limit', 1000.0)
+                        }
+                        
+                        # Determine side based on signal type
+                        side = 'buy' if sig.type == SignalType.BUY else 'sell'
                         
                         qty = PositionSizer.calculate_qty(
                             current_price=price,
-                            moving_avg=moving_avg,
-                            portfolio_value=curr_pos_val,
+                            current_position_value=current_pos_value,
                             buying_power=cash,
-                            params=params or {}
+                            confidence=sig.confidence,
+                            side=side,
+                            current_position_qty=current_pos_qty,
+                            params=sizer_params
                         )
                         
-                        current_pos_qty = positions.get(sym, 0.0)
 
                         if sig.type == SignalType.BUY and qty > 0:
                             cost = price * qty
