@@ -97,23 +97,6 @@ async def seed_initial_data():
             await db.commit()
         else:
             print("  Default parameters already exist, skipping.")
-        
-        # Initialize system state
-        result = await db.execute(
-            select(SystemState).where(SystemState.key == "trading_enabled")
-        )
-        existing_state = result.scalar_one_or_none()
-        
-        if not existing_state:
-            print("  Initializing system state...")
-            state = SystemState(
-                key="trading_enabled",
-                value="false"
-            )
-            db.add(state)
-            await db.commit()
-        else:
-            print("  System state already initialized, skipping.")
     
     print("✅ Initial data seeded successfully.")
 
