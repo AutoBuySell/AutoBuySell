@@ -8,7 +8,7 @@ import numpy as np
 
 from app.domain.models import Candle, BacktestRun, BacktestResult, StrategyParam
 from app.strategies.base import Strategy, StrategyContext, StrategySignal, SignalType
-from app.strategies.mean_reversion import MeanReversionStrategy
+from app.strategies.registry import get_all_strategies  # Centralized registry
 from app.brokers.base import AccountInfo
 
 # We need a Mock Broker context for the strategy
@@ -19,10 +19,8 @@ logger = logging.getLogger(__name__)
 class BacktestService:
     def __init__(self, db: AsyncSession):
         self.db = db
-        # Registry of strategies (same as TradingService)
-        self.strategies = {
-            "MeanReversion_v1": MeanReversionStrategy()
-        }
+        # Use centralized strategy registry
+        self.strategies = get_all_strategies()
 
     async def run_backtest(
         self, 

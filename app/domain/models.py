@@ -103,6 +103,7 @@ class Position(TimeStampedBase):
     market_value: Mapped[float] = mapped_column(Float)
     unrealized_pl: Mapped[float] = mapped_column(Float)
     unrealized_plpc: Mapped[float] = mapped_column(Float)
+    side: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)  # 'long' or 'short'
 
 class Order(TimeStampedBase):
     __tablename__ = "orders"
@@ -179,3 +180,16 @@ class BacktestResult(TimeStampedBase):
     total_trades: Mapped[int] = mapped_column(Integer)
     equity_curve: Mapped[list] = mapped_column(JSONB) # List of {time, equity}
     metrics: Mapped[dict] = mapped_column(JSONB) # Detailed trades etc
+
+# --- System State Persistence ---
+
+class SystemState(Base):
+    """
+    Persists system-level state like trading service status.
+    Survives server restarts.
+    """
+    __tablename__ = "system_state"
+    
+    key: Mapped[str] = mapped_column(String(50), primary_key=True)
+    value: Mapped[str] = mapped_column(String(255))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

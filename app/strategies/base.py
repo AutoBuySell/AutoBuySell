@@ -16,6 +16,7 @@ class StrategySignal(BaseModel):
     confidence: float = 1.0 # 0.0 to 1.0
     timestamp: datetime = datetime.now()
     metadata: Dict[str, Any] = {}
+    strategy_name: str = ""  # Name of strategy that generated this signal
 
 class StrategyContext(BaseModel):
     """

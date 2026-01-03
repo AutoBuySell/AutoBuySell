@@ -91,6 +91,7 @@ class MeanReversionStrategy(Strategy):
                 type=SignalType.BUY,
                 confidence=confidence,
                 timestamp=datetime.now(),
+                strategy_name=self.name,
                 metadata={
                     "reason": "Dip + Rebound",
                     "max_price": float(max_price),
@@ -124,6 +125,7 @@ class MeanReversionStrategy(Strategy):
                 type=SignalType.SELL,
                 confidence=confidence,
                 timestamp=datetime.now(),
+                strategy_name=self.name,
                 metadata={
                     "reason": "Peak + Pullback",
                     "min_price": float(min_price),

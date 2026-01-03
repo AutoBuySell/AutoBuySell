@@ -137,7 +137,7 @@ class ExecutionService:
 
     async def _log_signal(self, db: AsyncSession, signal: StrategySignal):
         log = SignalLog(
-            strategy_name="MeanReversion_v1", # Hardcoded or passed from context
+            strategy_name=signal.strategy_name,  # Use signal's strategy name
             symbol=signal.symbol,
             signal_type=signal.signal_type.name,
             signal_strength=signal.confidence,

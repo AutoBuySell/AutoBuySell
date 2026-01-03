@@ -5,9 +5,9 @@ import logging
 import asyncio
 
 from app.core.database import AsyncSessionLocal
-from app.domain.models import Symbol, StrategyMeta, StrategyParam, LogEntry, Candle
+from app.domain.models import Symbol, StrategyMeta, StrategyParam, LogEntry, Candle, SystemState
 from app.strategies.base import StrategyContext, StrategySignal, SignalType
-from app.strategies.mean_reversion import MeanReversionStrategy
+from app.strategies.registry import get_all_strategies  # Centralized registry
 from app.services.execution import ExecutionService
 from app.brokers.base import BrokerAdapter, AccountInfo
 
@@ -17,6 +17,10 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 logger = logging.getLogger(__name__)
 
+# System state keys
+STATE_KEY_IS_RUNNING = "trading_is_running"
+STATE_KEY_ACTIVE_STRATEGY = "trading_active_strategy"
+
 class TradingService:
     def __init__(self, broker: BrokerAdapter, execution_service: ExecutionService):
         self.broker = broker
@@ -25,15 +29,57 @@ class TradingService:
         self.is_running = False
         self.job_id = None
         
-        # Registry of available strategies
-        self.strategies = {
-            "MeanReversion_v1": MeanReversionStrategy()
-        }
+        # Use centralized strategy registry
+        self.strategies = get_all_strategies()
         
-        # Active strategy (can be changed via API)
-        self.active_strategy_name = "MeanReversion_v1"
+        # Active strategy (will be overridden by DB if exists)
+        # Use first registered strategy as default fallback
+        self.active_strategy_name = next(iter(self.strategies.keys()))
 
-    async def start(self):
+    async def _load_state(self):
+        """Load persisted state from DB"""
+        async with AsyncSessionLocal() as db:
+            # Load is_running state
+            result = await db.execute(
+                select(SystemState).where(SystemState.key == STATE_KEY_IS_RUNNING)
+            )
+            state = result.scalar_one_or_none()
+            should_run = state.value == "true" if state else False
+            
+            # Load active strategy
+            result = await db.execute(
+                select(SystemState).where(SystemState.key == STATE_KEY_ACTIVE_STRATEGY)
+            )
+            strategy_state = result.scalar_one_or_none()
+            if strategy_state and strategy_state.value in self.strategies:
+                self.active_strategy_name = strategy_state.value
+            
+            return should_run
+
+    async def _save_state(self, key: str, value: str):
+        """Save state to DB"""
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(SystemState).where(SystemState.key == key)
+            )
+            state = result.scalar_one_or_none()
+            
+            if state:
+                state.value = value
+            else:
+                state = SystemState(key=key, value=value)
+                db.add(state)
+            
+            await db.commit()
+
+    async def restore_state(self):
+        """Restore state on server startup"""
+        should_run = await self._load_state()
+        if should_run:
+            logger.info("Restoring trading service state: starting...")
+            await self.start(persist=False)  # Don't re-persist, just restore
+
+    async def start(self, persist: bool = True):
         """Start the trading loop"""
         if self.is_running:
             return
@@ -46,15 +92,24 @@ class TradingService:
             replace_existing=True
         )
         self.is_running = True
+        
+        if persist:
+            await self._save_state(STATE_KEY_IS_RUNNING, "true")
+            await self._save_state(STATE_KEY_ACTIVE_STRATEGY, self.active_strategy_name)
+        
         logger.info("Trading service started")
 
-    async def stop(self):
+    async def stop(self, persist: bool = True):
         """Stop the trading loop"""
         if not self.is_running:
             return
             
         self.scheduler.shutdown(wait=False)
         self.is_running = False
+        
+        if persist:
+            await self._save_state(STATE_KEY_IS_RUNNING, "false")
+        
         logger.info("Trading service stopped")
         
     def get_status(self) -> dict:
@@ -65,11 +120,12 @@ class TradingService:
             "available_strategies": list(self.strategies.keys())
         }
     
-    def set_active_strategy(self, strategy_name: str) -> bool:
+    async def set_active_strategy(self, strategy_name: str) -> bool:
         """Set the active strategy. Returns True if successful."""
         if strategy_name not in self.strategies:
             return False
         self.active_strategy_name = strategy_name
+        await self._save_state(STATE_KEY_ACTIVE_STRATEGY, strategy_name)
         logger.info(f"Active strategy changed to: {strategy_name}")
         return True
 

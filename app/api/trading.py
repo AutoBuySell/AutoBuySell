@@ -56,7 +56,7 @@ class StrategyRequest(BaseModel):
 async def set_active_strategy(req: StrategyRequest, request: Request):
     """Set the active trading strategy"""
     service: TradingService = request.app.state.trading_service
-    success = service.set_active_strategy(req.strategy_name)
+    success = await service.set_active_strategy(req.strategy_name)
     if not success:
         raise HTTPException(
             status_code=400, 

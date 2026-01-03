@@ -25,13 +25,13 @@ async def lifespan(app: FastAPI):
     
     app.state.trading_service = trading_service
     
-    # Auto-start if configured (Optional, keeping off by default for safety)
-    # await trading_service.start()
+    # Restore state from DB (auto-resume if was running before restart)
+    await trading_service.restore_state()
     
     yield
     
-    # Shutdown
-    await trading_service.stop()
+    # Shutdown: Don't persist state change to allow resume on next startup
+    await trading_service.stop(persist=False)
     await engine.dispose()
 
 app = FastAPI(
