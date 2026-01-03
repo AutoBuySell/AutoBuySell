@@ -17,6 +17,7 @@ class StrategySignal(BaseModel):
     timestamp: datetime = datetime.now()
     metadata: Dict[str, Any] = {}
     strategy_name: str = ""  # Name of strategy that generated this signal
+    qty: float = 0.0  # Calculated order quantity
 
 class StrategyContext(BaseModel):
     """
@@ -47,5 +48,17 @@ class Strategy(Protocol):
     async def on_bar(self, context: StrategyContext, candles: List[Any]) -> List[StrategySignal]:
         """
         Called on every bar/data update. 
+        """
+        ...
+    
+    def calculate_quantity(
+        self, 
+        signal: StrategySignal, 
+        account: AccountInfo,
+        current_position_qty: float = 0.0
+    ) -> float:
+        """
+        Calculate order quantity for the given signal.
+        Called after signal generation to determine position size.
         """
         ...

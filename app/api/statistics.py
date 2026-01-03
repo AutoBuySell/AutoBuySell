@@ -62,9 +62,8 @@ async def get_equity_performance(
     candles = candles_res.scalars().all()
     
     if not candles:
-        # Fallback: if no DB candles, maybe ask Broker? 
-        # For now, return empty.
-        return {"date": [], "price": [], "qty": [], "income": []}
+        # Fallback: if no DB candles, return empty data array (frontend expects "data" key)
+        return {"data": []}
         
     # 3. Fetch Trades (All time? Or just relevant? Need all time to know initial qty if start_date > first_trade)
     # Actually, calculating "Nominal Income" over a period requires knowing Qty at start_date.

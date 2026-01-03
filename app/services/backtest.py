@@ -10,9 +10,7 @@ from app.domain.models import Candle, BacktestRun, BacktestResult, StrategyParam
 from app.strategies.base import Strategy, StrategyContext, StrategySignal, SignalType
 from app.strategies.registry import get_all_strategies  # Centralized registry
 from app.brokers.base import AccountInfo
-
-# We need a Mock Broker context for the strategy
-# StrategyContext requires 'account' info.
+from app.api.ws import manager  # WebSocket manager
 
 logger = logging.getLogger(__name__)
 
@@ -131,10 +129,9 @@ class BacktestService:
             
             # We need a window for strategy lookback
             lookback = getattr(strategy, 'params', {}).get('duration', 20) + 10
-            
-            from app.services.position_sizer import PositionSizer
+            total_dates = len(sorted_dates)
 
-            for current_date in sorted_dates:
+            for date_idx, current_date in enumerate(sorted_dates):
                 # 1. Update Market Value for Equity Calc
                 # We need closing prices for ALL held positions to calculate accurate equity.
                 # If a symbol has no candle today, use last known price? 
@@ -201,31 +198,11 @@ class BacktestService:
                     for sig in signals:
                         price = current_candle.close
                         
-                        # Re-calc current position value for Sizer
+                        # Current position quantity
                         current_pos_qty = positions.get(sym, 0.0)
-                        current_pos_value = current_pos_qty * price
                         
-                        # Use params from signal metadata (same as live trading)
-                        sizer_params = {
-                            'max_position_pct': sig.metadata.get('max_position_pct', 0.20),
-                            'scale_factor': sig.metadata.get('scale_factor', 200.0),
-                            'target_value': sig.metadata.get('target_value', 1000.0),
-                            'limit': sig.metadata.get('limit', 1000.0)
-                        }
-                        
-                        # Determine side based on signal type
-                        side = 'buy' if sig.type == SignalType.BUY else 'sell'
-                        
-                        qty = PositionSizer.calculate_qty(
-                            current_price=price,
-                            current_position_value=current_pos_value,
-                            buying_power=cash,
-                            confidence=sig.confidence,
-                            side=side,
-                            current_position_qty=current_pos_qty,
-                            params=sizer_params
-                        )
-                        
+                        # Use strategy's calculate_quantity method
+                        qty = strategy.calculate_quantity(sig, mock_account, current_pos_qty)
 
                         if sig.type == SignalType.BUY and qty > 0:
                             cost = price * qty
@@ -273,6 +250,19 @@ class BacktestService:
                     "time": datetime.combine(current_date, datetime.min.time()).isoformat(),
                     "equity": total_equity
                 })
+                
+                # Broadcast progress via WebSocket
+                if date_idx % 5 == 0 or date_idx == total_dates - 1:  # Every 5 dates or last
+                    await manager.broadcast({
+                        "type": "BACKTEST_PROGRESS",
+                        "data": {
+                            "run_id": str(run_record.id),
+                            "progress": round((date_idx + 1) / total_dates * 100, 1),
+                            "current_date": str(current_date),
+                            "trades_so_far": len(trades),
+                            "current_equity": round(total_equity, 2)
+                        }
+                    })
 
             # 5. Calculate Metrics
             final_equity = equity_curve[-1]["equity"] if equity_curve else initial_capital
@@ -296,6 +286,18 @@ class BacktestService:
             run_record.status = "COMPLETED"
             await self.db.commit()
             
+            # Broadcast completion via WebSocket
+            await manager.broadcast({
+                "type": "BACKTEST_COMPLETED",
+                "data": {
+                    "run_id": str(run_record.id),
+                    "status": "COMPLETED",
+                    "total_return": round(total_return * 100, 2),
+                    "total_trades": len(trades),
+                    "final_equity": round(final_equity, 2)
+                }
+            })
+            
             return str(run_record.id)
 
         except Exception as e:
@@ -303,4 +305,15 @@ class BacktestService:
             run_record.status = "FAILED"
             run_record.error_message = str(e)
             await self.db.commit()
+            
+            # Broadcast failure via WebSocket
+            await manager.broadcast({
+                "type": "BACKTEST_COMPLETED",
+                "data": {
+                    "run_id": str(run_record.id),
+                    "status": "FAILED",
+                    "error": str(e)
+                }
+            })
+            
             raise e

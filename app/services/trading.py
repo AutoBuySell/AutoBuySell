@@ -1,6 +1,7 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from datetime import datetime, timedelta
+from typing import List
 import logging
 import asyncio
 
@@ -259,17 +260,38 @@ class TradingService:
         except Exception as e:
             logger.error(f"Failed to sync positions: {e}")
 
+    def _prioritize_signals(self, signals: List[StrategySignal]) -> List[StrategySignal]:
+        """
+        Prioritize signals:
+        1. SELL/EXIT first (to free up cash)
+        2. BUY sorted by confidence (highest first)
+        """
+        sell_signals = [s for s in signals if s.type in (SignalType.SELL, SignalType.EXIT)]
+        buy_signals = [s for s in signals if s.type == SignalType.BUY]
+        
+        # Sort BUY signals by confidence (descending)
+        buy_signals.sort(key=lambda s: s.confidence, reverse=True)
+        
+        return sell_signals + buy_signals
+    
+    async def _get_position_qty(self, db: AsyncSession, symbol: str) -> float:
+        """Get current position quantity for a symbol"""
+        from app.domain.models import Position
+        result = await db.execute(
+            select(Position).where(Position.symbol == symbol)
+        )
+        position = result.scalar_one_or_none()
+        return position.qty if position else 0.0
+
 
     async def _process_symbol(self, db: AsyncSession, ticker: str, strategy, account: AccountInfo):
         try:
             # Fetch Data
-            # Note: Strategy needs 'duration' + extra for calculations.
             duration = strategy.params.get("duration", 20)
             candle_buffer = strategy.params.get("candle_buffer", 10)
             limit = duration + candle_buffer
             
             # Fetch from Broker (Alpaca)
-            # Use strategy's configured timeframe
             raw_candles = await self.broker.get_historicals(ticker, strategy.timeframe, limit)
             
             if not raw_candles:
@@ -293,21 +315,33 @@ class TradingService:
             context = StrategyContext(symbol=ticker, account=account)
             signals = await strategy.on_bar(context, candles)
             
-            if signals:
-                logger.info(f"Generated {len(signals)} signals for {ticker}")
+            if not signals:
+                return
+            
+            logger.info(f"Generated {len(signals)} signals for {ticker}")
+            
+            # Prioritize signals (SELL first, then BUY by confidence)
+            signals = self._prioritize_signals(signals)
+            
+            # Process each signal sequentially
+            for signal in signals:
+                # Get latest account info (previous execution may have changed balance)
+                account = await self.broker.get_account_info()
+                position_qty = await self._get_position_qty(db, signal.symbol)
                 
-                # Log Signal
-                for s in signals:
-                    db.add(LogEntry(
-                        level="INFO",
-                        source="Signal",
-                        message=f"{s.type.name} Signal for {s.symbol} (Conf: {s.confidence})",
-                        context=s.dict()
-                    ))
-                await db.commit()
-
-                # Execute
-                await self.execution.process_signals(db, signals)
+                # Calculate quantity
+                signal.qty = strategy.calculate_quantity(signal, account, position_qty)
+                
+                # Log Signal (commit handled by execution)
+                db.add(LogEntry(
+                    level="INFO",
+                    source="Signal",
+                    message=f"{signal.type.name} Signal for {signal.symbol} (Conf: {signal.confidence}, Qty: {signal.qty:.2f})",
+                    context=signal.dict()
+                ))
+                
+                # Execute single signal (handles commit)
+                await self.execution.process_signal(db, signal)
 
         except Exception as e:
             logger.error(f"Error processing {ticker}: {e}")

@@ -141,3 +141,44 @@ class MeanReversionStrategy(Strategy):
             ))
             
         return signals
+    
+    def calculate_quantity(
+        self, 
+        signal: StrategySignal, 
+        account,
+        current_position_qty: float = 0.0
+    ) -> float:
+        """
+        Calculate order quantity using Mean Reversion sizing logic.
+        
+        BUY:  amount = pow(2, value_diff / target_value) * confidence * (target_value / 5)
+        SELL: amount = pow(2, -value_diff / target_value) * confidence * (target_value / 5)
+        
+        Where value_diff = target_value - current_position_value
+        """
+        current_price = signal.metadata.get('current_price', 0.0)
+        if current_price <= 0:
+            return 0.0
+        
+        target_value = self.params.get('target_value', 1000.0)
+        limit = self.params.get('limit', 1000.0)
+        
+        current_position_value = current_position_qty * current_price
+        value_diff = target_value - current_position_value
+        
+        qty = 0.0
+        
+        if signal.type == SignalType.SELL and current_position_qty > 0:
+            # SELL: pow(2, -value_diff / target_value) * confidence * (target_value / 5)
+            amount = pow(2, -value_diff / target_value) * signal.confidence * (target_value / 5)
+            amount = min(amount, limit)
+            qty = min(amount / current_price, current_position_qty)  # Can't sell more than we have
+            
+        elif signal.type == SignalType.BUY:
+            # BUY: pow(2, value_diff / target_value) * confidence * (target_value / 5)
+            amount = pow(2, value_diff / target_value) * signal.confidence * (target_value / 5)
+            amount = min(amount, account.buying_power, limit)
+            qty = amount / current_price
+        
+        return float(max(0.0, qty))
+

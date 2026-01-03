@@ -6,6 +6,7 @@ import requests
 import asyncio
 
 from sqlalchemy import select, and_, delete
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from app.core.config import settings
 from app.domain.models import Candle, LogEntry, DataDownloadRecord
 
@@ -165,6 +166,9 @@ class DataService:
         saved_count = 0
         loop = asyncio.get_event_loop()
         
+        # Track candles added in this session to avoid duplicates
+        added_keys = set()  # (symbol, timeframe, timestamp)
+        
         # Split symbols into chunks of 20
         chunk_size = 20
         for i in range(0, len(symbols), chunk_size):
@@ -199,19 +203,13 @@ class DataService:
                         ts_str = bar["t"]
                         ts = datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
                         
-                        # Upsert: Check if exists
-                        stmt = select(Candle).where(
-                            and_(
-                                Candle.symbol == sym,
-                                Candle.timeframe == timeframe,
-                                Candle.timestamp == ts
-                            )
-                        )
-                        result = await self.db.execute(stmt)
-                        if result.scalar_one_or_none():
+                        # Create key for deduplication in this session
+                        candle_key = (sym, timeframe, ts)
+                        if candle_key in added_keys:
                             continue
                         
-                        candle = Candle(
+                        # Use PostgreSQL INSERT ON CONFLICT DO NOTHING
+                        stmt = pg_insert(Candle).values(
                             symbol=sym,
                             timeframe=timeframe,
                             timestamp=ts,
@@ -220,8 +218,11 @@ class DataService:
                             low=float(bar["l"]),
                             close=float(bar["c"]),
                             volume=float(bar["v"])
+                        ).on_conflict_do_nothing(
+                            index_elements=['symbol', 'timeframe', 'timestamp']
                         )
-                        self.db.add(candle)
+                        await self.db.execute(stmt)
+                        added_keys.add(candle_key)
                         saved_count += 1
                 
                 next_token = data.get("next_page_token")
