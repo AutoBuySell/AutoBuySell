@@ -119,6 +119,10 @@ export const tradingApi = {
   },
   stop: async () => {
       await apiClient.post('/trading/stop');
+  },
+  setStrategy: async (strategyName: string) => {
+      const { data } = await apiClient.put('/trading/strategy', { strategy_name: strategyName });
+      return data;
   }
 };
 
@@ -133,7 +137,7 @@ export const dataApi = {
     deactivateSymbol: async (ticker: string) => {
         await apiClient.delete(`/data/symbols/${ticker}`);
     },
-    download: async (symbols: string[], start: string, end: string, timeframe: string = '1d') => {
+    download: async (symbols: string[], start: string, end: string, timeframe: string) => {
         await apiClient.post('/data/candles/download', {
             symbols, start_date: start, end_date: end, timeframe
         });
@@ -141,7 +145,7 @@ export const dataApi = {
     batchDownload: async (payload: { symbols: string[], start_date: string, end_date: string, timeframes: string[] }) => {
         await apiClient.post('/data/candles/batch-download', payload);
     },
-    checkDataAvailability: async (symbols: string[], startDate: string, endDate: string, timeframe: string = '1d') => {
+    checkDataAvailability: async (symbols: string[], startDate: string, endDate: string, timeframe: string) => {
         const { data } = await apiClient.get<string[]>('/data/candles/check-availability', {
             params: { symbols: symbols.join(','), start_date: startDate, end_date: endDate, timeframe }
         });

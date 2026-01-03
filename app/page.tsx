@@ -163,6 +163,16 @@ function SystemStatusCard() {
         }
     };
 
+    const handleStrategyChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
+        const newStrategy = e.target.value;
+        try {
+            await tradingApi.setStrategy(newStrategy);
+            await refreshStatus();
+        } catch (err) {
+            console.error("Failed to change strategy", err);
+        }
+    };
+
     const isRunning = status?.is_running;
 
     return (
@@ -175,10 +185,29 @@ function SystemStatusCard() {
                 <div className="text-2xl font-bold capitalize">
                     {isRunning ? 'Running' : 'Paused'}
                 </div>
+                
+                {/* Strategy Selection Dropdown */}
+                <div className="mt-3">
+                    <label className="block text-xs text-muted-foreground mb-1">Active Strategy</label>
+                    <select
+                        value={status?.active_strategy || ''}
+                        onChange={handleStrategyChange}
+                        disabled={isRunning}
+                        className="w-full px-2 py-1 border rounded text-sm bg-background text-foreground disabled:opacity-50"
+                    >
+                        {(status?.available_strategies || []).map((s: string) => (
+                            <option key={s} value={s}>{s}</option>
+                        ))}
+                    </select>
+                    {isRunning && (
+                        <p className="text-xs text-muted-foreground mt-1">Stop trading to change strategy</p>
+                    )}
+                </div>
+
                 <button 
                     onClick={toggleTrading}
                     disabled={loading}
-                    className={`mt-2 w-full py-1 px-3 rounded text-xs font-bold text-white transition-colors ${
+                    className={`mt-3 w-full py-1 px-3 rounded text-xs font-bold text-white transition-colors ${
                         isRunning 
                         ? 'bg-red-600 hover:bg-red-700' 
                         : 'bg-green-600 hover:bg-green-700'

@@ -111,11 +111,16 @@ export default function AnalysisPage() {
       }
 
       try {
-          // 1. Check Data Availability
+          // Get strategy params to get timeframe
+          const strategyParams = await backtestApi.getStrategyParams(form.strategy);
+          const timeframe = strategyParams?.params?.timeframe || '30Min';
+          
+          // 1. Check Data Availability with strategy's timeframe
           const missingSymbols = await dataApi.checkDataAvailability(
               symbolsList, 
               form.startDate || '2023-01-01', 
-              form.endDate || '2023-12-31'
+              form.endDate || '2023-12-31',
+              timeframe
           );
 
           if (missingSymbols.length > 0) {
@@ -129,6 +134,7 @@ export default function AnalysisPage() {
           // No missing data - run backtest directly
           await executeBacktest(symbolsList);
       } catch (e) {
+          console.error('Error:', e);
           alert('Failed to check data availability');
       }
   };
@@ -138,18 +144,24 @@ export default function AnalysisPage() {
       setIsDownloadingData(true);
       
       try {
+          // Get strategy params to get timeframe
+          const strategyParams = await backtestApi.getStrategyParams(form.strategy);
+          const timeframe = strategyParams?.params?.timeframe || '30Min';
+          
           await dataApi.batchDownload({
               symbols: missingSymbolsForDownload,
               start_date: form.startDate || '2023-01-01',
               end_date: form.endDate || '2023-12-31',
-              timeframes: ['30Min', '1d']  // Download both for strategy flexibility
+              timeframes: [timeframe]  // Use strategy's timeframe
           });
-          // Wait a bit for DB commit
-          await new Promise(r => setTimeout(r, 3000));
+          
+          // Wait a bit for background download to complete
+          await new Promise(r => setTimeout(r, 5000));
           
           // Now run the backtest
           await executeBacktest(pendingSymbolsList);
       } catch (e) {
+          console.error('Download error:', e);
           alert('Download failed. Check logs.');
       } finally {
           setIsDownloadingData(false);
