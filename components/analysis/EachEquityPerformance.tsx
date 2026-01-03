@@ -41,9 +41,10 @@ export default function EachEquityPerformance() {
         setLoading(true);
         try {
             const res = await statisticsApi.getEquityPerformance(selectedSymbol, period, type);
-            setData(res);
+            setData(res ?? []);  // Fallback to empty array if undefined
         } catch (e) {
             console.error("Failed to load equity performance", e);
+            setData([]);  // Set empty array on error
         } finally {
             setLoading(false);
         }
@@ -84,7 +85,7 @@ export default function EachEquityPerformance() {
             </CardHeader>
             <CardContent>
                 <div className="h-[350px] w-full">
-                    {data.length > 0 ? (
+                    {data?.length > 0 ? (
                         <ResponsiveContainer width="100%" height="100%">
                             <ComposedChart data={data}>
                                 <CartesianGrid strokeDasharray="3 3" opacity={0.3} />

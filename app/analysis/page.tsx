@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { backtestApi, BacktestRun, BacktestResult, dataApi, SymbolInfo, tradingApi, PortfolioHistory, Position } from '@/lib/api';
+import { wsClient } from '@/lib/websocket';
 import { 
     LineChart, Line, AreaChart, Area, PieChart, Pie, Cell, 
     XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend 
@@ -17,13 +18,15 @@ const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#82ca9d'
 type Tab = 'backtest' | 'live';
 
 export default function AnalysisPage() {
-  const [activeTab, setActiveTab] = useState<Tab>('backtest');
+  const [activeTab, setActiveTab] = useState<Tab>('live');
   
   // -- Backtest State --
   const [strategies, setStrategies] = useState<string[]>([]);
   const [symbols, setSymbols] = useState<SymbolInfo[]>([]);
   const [runs, setRuns] = useState<BacktestRun[]>([]);
   const [selectedRun, setSelectedRun] = useState<BacktestResult | null>(null);
+  const [backtestProgress, setBacktestProgress] = useState<number>(0);
+  const [currentRunId, setCurrentRunId] = useState<string | null>(null);
   
   const [form, setForm] = useState({
     strategy: '',
@@ -47,8 +50,29 @@ export default function AnalysisPage() {
 
   useEffect(() => {
     loadInitialData();
-    const interval = setInterval(loadRuns, 30000); // Poll for run updates every 30s
-    return () => clearInterval(interval);
+    
+    // WebSocket subscription for backtest events
+    wsClient.connect();
+    const unsubscribe = wsClient.subscribe((msg: any) => {
+        if (msg.type === 'BACKTEST_PROGRESS') {
+            setBacktestProgress(msg.data.progress);
+            setCurrentRunId(msg.data.run_id);
+        }
+        if (msg.type === 'BACKTEST_COMPLETED') {
+            console.log("Backtest completed, refreshing runs...");
+            loadRuns();
+            setLoading(false);
+            setBacktestProgress(0);
+            setCurrentRunId(null);
+        }
+    });
+    
+    // Fallback polling every 2 minutes (WebSocket is primary)
+    const interval = setInterval(loadRuns, 120000);
+    return () => {
+        clearInterval(interval);
+        unsubscribe();
+    };
   }, []);
 
   useEffect(() => {
@@ -219,7 +243,7 @@ export default function AnalysisPage() {
       <div className="flex justify-between items-center">
           <h1 className="text-3xl font-bold">Analysis</h1>
           <div className="flex bg-muted rounded p-1">
-              {(['backtest', 'live'] as Tab[]).map(tab => (
+              {(['live', 'backtest'] as Tab[]).map(tab => (
                   <button
                       key={tab}
                       onClick={() => setActiveTab(tab)}
@@ -315,6 +339,22 @@ export default function AnalysisPage() {
                     >
                         {isDownloadingData ? 'Downloading Data...' : (loading ? 'Running...' : 'Run Backtest')}
                     </button>
+                    
+                    {/* Real-time Progress Bar */}
+                    {backtestProgress > 0 && (
+                        <div className="space-y-1">
+                            <div className="flex justify-between text-xs text-muted-foreground">
+                                <span>Progress</span>
+                                <span>{backtestProgress.toFixed(1)}%</span>
+                            </div>
+                            <div className="w-full bg-muted rounded-full h-2">
+                                <div 
+                                    className="bg-primary h-2 rounded-full transition-all duration-300"
+                                    style={{ width: `${backtestProgress}%` }}
+                                />
+                            </div>
+                        </div>
+                    )}
 
                     {/* Backtest History inside Config Panel for space */}
                     <div className="mt-8">
