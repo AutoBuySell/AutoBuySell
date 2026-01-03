@@ -19,7 +19,7 @@ export default function RootLayout({
       <body className={inter.className}>
         <div className="min-h-screen bg-background text-foreground flex flex-col">
           <header className="border-b border-border p-4 bg-muted/20 flex justify-between items-center">
-            <h1 className="text-xl font-bold">AutoBuySell Dashboard</h1>
+            <h1 className="text-xl font-bold">AutoBuySell by TIM</h1>
             <nav className="space-x-4">
               <a href="/" className="hover:text-primary">Dashboard</a>
               <a href="/analysis" className="hover:text-primary">Analysis</a>

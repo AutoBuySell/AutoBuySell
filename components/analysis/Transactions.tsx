@@ -57,9 +57,11 @@ export default function Transactions({ limit = 50, refreshTrigger }: { limit?: n
                                          </span>
                                      </td>
                                      <td className="px-4 py-2 text-right">{t.qty}</td>
-                                     <td className="px-4 py-2 text-right">${t.price.toFixed(2)}</td>
+                                     <td className="px-4 py-2 text-right">
+                                         {t.price ? `$${t.price.toFixed(2)}` : '-'}
+                                     </td>
                                      <td className="px-4 py-2 text-right font-medium">
-                                         ${(t.price * t.qty).toLocaleString()}
+                                         {t.price ? `$${(t.price * t.qty).toLocaleString()}` : '-'}
                                      </td>
                                  </tr>
                              ))}

@@ -555,10 +555,13 @@ export default function AnalysisPage() {
                   <NominalIncomes refreshTrigger={refreshTrigger} />
               </div>
 
-              {/* Middle Row: Each Equity Performance & Pie Chart */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Middle Row: Each Equity Performance (Full Width) */}
+              <div className="grid grid-cols-1 gap-6">
                    <EachEquityPerformance />
-                   
+              </div>
+
+              {/* Portfolio Allocation Row */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                    {/* Holdings Pie Chart */}
                    <Card>
                       <CardHeader>
@@ -593,6 +596,38 @@ export default function AnalysisPage() {
                                   </div>
                               )}
                           </div>
+                      </CardContent>
+                  </Card>
+                  
+                  {/* Holdings Summary moved here */}
+                  <Card>
+                      <CardHeader>
+                          <CardTitle>Holdings Summary</CardTitle>
+                      </CardHeader>
+                      <CardContent>
+                           <table className="w-full text-sm">
+                               <thead>
+                                   <tr className="border-b text-left">
+                                       <th className="pb-2">Symbol</th>
+                                       <th className="pb-2 text-right">Value</th>
+                                       <th className="pb-2 text-right">P/L %</th>
+                                   </tr>
+                               </thead>
+                               <tbody>
+                                   {positions.map(p => (
+                                       <tr key={p.symbol} className="border-b last:border-0 hover:bg-muted/50">
+                                           <td className="py-2">{p.symbol}</td>
+                                           <td className="py-2 text-right">${p.market_value.toLocaleString()}</td>
+                                           <td className={`py-2 text-right ${p.unrealized_plpc >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                                               {(p.unrealized_plpc * 100).toFixed(2)}%
+                                           </td>
+                                       </tr>
+                                  ))}
+                                   {positions.length === 0 && (
+                                       <tr><td colSpan={3} className="py-4 text-center text-muted-foreground">No positions</td></tr>
+                                   )}
+                               </tbody>
+                           </table>
                       </CardContent>
                   </Card>
               </div>

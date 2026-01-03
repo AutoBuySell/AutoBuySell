@@ -2,16 +2,16 @@
 
 import { useEffect, useState } from 'react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { statisticsApi, dataApi } from '@/lib/api';
 import { 
-    ComposedChart, Line, Bar, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend 
+    LineChart, Line, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer 
 } from 'recharts';
 
 export default function EachEquityPerformance() {
     const [symbols, setSymbols] = useState<string[]>([]);
     const [selectedSymbol, setSelectedSymbol] = useState<string>('');
     const [period, setPeriod] = useState('1M');
-    const [type, setType] = useState('nominal'); // nominal or realized
     
     const [data, setData] = useState<any[]>([]);
     const [loading, setLoading] = useState(false);
@@ -24,7 +24,7 @@ export default function EachEquityPerformance() {
         if (selectedSymbol) {
             loadData();
         }
-    }, [selectedSymbol, period, type]);
+    }, [selectedSymbol, period]);
 
     const loadSymbols = async () => {
         try {
@@ -40,18 +40,31 @@ export default function EachEquityPerformance() {
     const loadData = async () => {
         setLoading(true);
         try {
-            const res = await statisticsApi.getEquityPerformance(selectedSymbol, period, type);
-            setData(res ?? []);  // Fallback to empty array if undefined
+            const res = await statisticsApi.getEquityPerformance(selectedSymbol, period, 'nominal');
+            setData(res ?? []);
         } catch (e) {
             console.error("Failed to load equity performance", e);
-            setData([]);  // Set empty array on error
+            setData([]);
         } finally {
             setLoading(false);
         }
     };
 
+    const commonTooltipStyle = {
+        backgroundColor: 'rgba(255, 255, 255, 0.95)',
+        border: '1px solid #ccc',
+        borderRadius: '4px',
+        color: '#000'
+    };
+
+    const NoDataMessage = () => (
+        <div className="flex h-full items-center justify-center text-muted-foreground">
+            {loading ? 'Loading...' : 'No data available for selected criteria'}
+        </div>
+    );
+
     return (
-        <Card>
+        <Card className="col-span-2">
             <CardHeader className="flex flex-row items-center justify-between pb-2">
                 <CardTitle className="text-base font-medium">Each Equity Performance</CardTitle>
                 <div className="flex gap-2">
@@ -61,14 +74,6 @@ export default function EachEquityPerformance() {
                         className="h-8 rounded border text-sm px-2 bg-background text-foreground"
                     >
                         {symbols.map(s => <option key={s} value={s}>{s}</option>)}
-                    </select>
-                    <select 
-                        value={type} 
-                        onChange={(e) => setType(e.target.value)}
-                        className="h-8 rounded border text-sm px-2 bg-background text-foreground"
-                    >
-                        <option value="nominal">Nominal (Unrealized)</option>
-                        <option value="realized">Realized</option>
                     </select>
                     <select 
                         value={period} 
@@ -84,82 +89,181 @@ export default function EachEquityPerformance() {
                 </div>
             </CardHeader>
             <CardContent>
-                <div className="h-[350px] w-full">
-                    {data?.length > 0 ? (
-                        <ResponsiveContainer width="100%" height="100%">
-                            <ComposedChart data={data}>
-                                <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
-                                <XAxis 
-                                    dataKey="date" 
-                                    tickFormatter={(str) => str.split('T')[0]} 
-                                    minTickGap={30}
-                                    stroke="#888888" 
-                                    fontSize={12} 
-                                    tickLine={false} 
-                                    axisLine={false} 
-                                />
-                                <YAxis 
-                                    yAxisId="left"
-                                    stroke="#888888" 
-                                    fontSize={12} 
-                                    tickLine={false} 
-                                    axisLine={false}
-                                    tickFormatter={(val) => `$${val}`}
-                                />
-                                <YAxis 
-                                    yAxisId="right" 
-                                    orientation="right" 
-                                    stroke="#888888" 
-                                    fontSize={12} 
-                                    tickLine={false} 
-                                    axisLine={false}
-                                />
-                                <Tooltip 
-                                    labelFormatter={(label) => label.split('T')[0]}
-                                    contentStyle={{
-                                        backgroundColor: 'rgba(255, 255, 255, 0.95)',
-                                        border: '1px solid #ccc',
-                                        borderRadius: '4px',
-                                        color: '#000'
-                                    }}
-                                />
-                                <Legend />
-                                <Area 
-                                    yAxisId="right"
-                                    type="monotone" 
-                                    dataKey="qty" 
-                                    fill="#8884d8" 
-                                    stroke="#8884d8" 
-                                    fillOpacity={0.1} 
-                                    name="Quantity"
-                                />
-                                <Line 
-                                    yAxisId="left"
-                                    type="monotone" 
-                                    dataKey={type === 'nominal' ? 'nominal_income' : 'realized_income'} 
-                                    stroke="#22c55e" 
-                                    strokeWidth={2}
-                                    dot={false}
-                                    name={type === 'nominal' ? 'Nominal Income' : 'Realized Income'}
-                                />
-                                <Line
-                                    yAxisId="left"
-                                    type="monotone"
-                                    dataKey="price"
-                                    stroke="#f59e0b"
-                                    strokeWidth={1}
-                                    dot={false}
-                                    name="Price"
-                                    hide={type === 'realized'} // Only show price in nominal mode usually? Or both.
-                                />
-                            </ComposedChart>
-                        </ResponsiveContainer>
-                    ) : (
-                        <div className="flex h-full items-center justify-center text-muted-foreground">
-                            {loading ? 'Loading...' : 'No data available for selected criteria'}
-                        </div>
-                    )}
-                </div>
+                <Tabs defaultValue="nominal" className="w-full">
+                    <TabsList className="grid w-full grid-cols-4 mb-4">
+                        <TabsTrigger value="price">Price</TabsTrigger>
+                        <TabsTrigger value="quantity">Quantity</TabsTrigger>
+                        <TabsTrigger value="nominal">Nominal</TabsTrigger>
+                        <TabsTrigger value="realized">Realized</TabsTrigger>
+                    </TabsList>
+                    
+                    {/* Price Tab */}
+                    <TabsContent value="price" className="h-[400px]">
+                        {data?.length > 0 ? (
+                            <ResponsiveContainer width="100%" height="100%">
+                                <LineChart data={data}>
+                                    <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
+                                    <XAxis 
+                                        dataKey="date" 
+                                        tickFormatter={(str) => str.split('T')[0]} 
+                                        minTickGap={30}
+                                        stroke="#888888" 
+                                        fontSize={12} 
+                                        tickLine={false} 
+                                        axisLine={false} 
+                                    />
+                                    <YAxis 
+                                        stroke="#888888" 
+                                        fontSize={12} 
+                                        tickLine={false} 
+                                        axisLine={false}
+                                        tickFormatter={(val) => `$${val}`}
+                                    />
+                                    <Tooltip 
+                                        labelFormatter={(label) => label.split('T')[0]}
+                                        contentStyle={commonTooltipStyle}
+                                    />
+                                    <Line 
+                                        type="monotone" 
+                                        dataKey="price" 
+                                        stroke="#f59e0b" 
+                                        strokeWidth={2}
+                                        dot={false}
+                                        name="Stock Price"
+                                    />
+                                </LineChart>
+                            </ResponsiveContainer>
+                        ) : <NoDataMessage />}
+                    </TabsContent>
+                    
+                    {/* Quantity Tab */}
+                    <TabsContent value="quantity" className="h-[400px]">
+                        {data?.length > 0 ? (
+                            <ResponsiveContainer width="100%" height="100%">
+                                <AreaChart data={data}>
+                                    <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
+                                    <XAxis 
+                                        dataKey="date" 
+                                        tickFormatter={(str) => str.split('T')[0]} 
+                                        minTickGap={30}
+                                        stroke="#888888" 
+                                        fontSize={12} 
+                                        tickLine={false} 
+                                        axisLine={false} 
+                                    />
+                                    <YAxis 
+                                        stroke="#888888" 
+                                        fontSize={12} 
+                                        tickLine={false} 
+                                        axisLine={false}
+                                    />
+                                    <Tooltip 
+                                        labelFormatter={(label) => label.split('T')[0]}
+                                        contentStyle={commonTooltipStyle}
+                                    />
+                                    <defs>
+                                        <linearGradient id="colorQty" x1="0" y1="0" x2="0" y2="1">
+                                            <stop offset="5%" stopColor="#8884d8" stopOpacity={0.8}/>
+                                            <stop offset="95%" stopColor="#8884d8" stopOpacity={0}/>
+                                        </linearGradient>
+                                    </defs>
+                                    <Area 
+                                        type="monotone" 
+                                        dataKey="qty" 
+                                        stroke="#8884d8" 
+                                        fill="url(#colorQty)"
+                                        name="Holding Quantity"
+                                    />
+                                </AreaChart>
+                            </ResponsiveContainer>
+                        ) : <NoDataMessage />}
+                    </TabsContent>
+                    
+                    {/* Nominal Income Tab */}
+                    <TabsContent value="nominal" className="h-[400px]">
+                        {data?.length > 0 ? (
+                            <ResponsiveContainer width="100%" height="100%">
+                                <LineChart data={data}>
+                                    <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
+                                    <XAxis 
+                                        dataKey="date" 
+                                        tickFormatter={(str) => str.split('T')[0]} 
+                                        minTickGap={30}
+                                        stroke="#888888" 
+                                        fontSize={12} 
+                                        tickLine={false} 
+                                        axisLine={false} 
+                                    />
+                                    <YAxis 
+                                        stroke="#888888" 
+                                        fontSize={12} 
+                                        tickLine={false} 
+                                        axisLine={false}
+                                        tickFormatter={(val) => `$${val}`}
+                                    />
+                                    <Tooltip 
+                                        labelFormatter={(label) => label.split('T')[0]}
+                                        contentStyle={commonTooltipStyle}
+                                        formatter={(value: number) => [`$${value.toFixed(2)}`, 'Nominal Income']}
+                                    />
+                                    <Line 
+                                        type="monotone" 
+                                        dataKey="nominal_income" 
+                                        stroke="#22c55e" 
+                                        strokeWidth={2}
+                                        dot={false}
+                                        name="Nominal Income (Unrealized P/L)"
+                                    />
+                                </LineChart>
+                            </ResponsiveContainer>
+                        ) : <NoDataMessage />}
+                    </TabsContent>
+                    
+                    {/* Realized Income Tab */}
+                    <TabsContent value="realized" className="h-[400px]">
+                        {data?.length > 0 ? (
+                            <ResponsiveContainer width="100%" height="100%">
+                                <AreaChart data={data}>
+                                    <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
+                                    <XAxis 
+                                        dataKey="date" 
+                                        tickFormatter={(str) => str.split('T')[0]} 
+                                        minTickGap={30}
+                                        stroke="#888888" 
+                                        fontSize={12} 
+                                        tickLine={false} 
+                                        axisLine={false} 
+                                    />
+                                    <YAxis 
+                                        stroke="#888888" 
+                                        fontSize={12} 
+                                        tickLine={false} 
+                                        axisLine={false}
+                                        tickFormatter={(val) => `$${val}`}
+                                    />
+                                    <Tooltip 
+                                        labelFormatter={(label) => label.split('T')[0]}
+                                        contentStyle={commonTooltipStyle}
+                                        formatter={(value: number) => [`$${value.toFixed(2)}`, 'Realized Income']}
+                                    />
+                                    <defs>
+                                        <linearGradient id="colorRealized" x1="0" y1="0" x2="0" y2="1">
+                                            <stop offset="5%" stopColor="#ef4444" stopOpacity={0.8}/>
+                                            <stop offset="95%" stopColor="#ef4444" stopOpacity={0}/>
+                                        </linearGradient>
+                                    </defs>
+                                    <Area 
+                                        type="monotone" 
+                                        dataKey="realized_income" 
+                                        stroke="#ef4444" 
+                                        fill="url(#colorRealized)"
+                                        name="Realized Income (Cumulative)"
+                                    />
+                                </AreaChart>
+                            </ResponsiveContainer>
+                        ) : <NoDataMessage />}
+                    </TabsContent>
+                </Tabs>
             </CardContent>
         </Card>
     );
