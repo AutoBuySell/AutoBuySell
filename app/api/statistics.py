@@ -10,10 +10,10 @@ from app.domain.models import Position, Trade, Candle
 
 router = APIRouter()
 
-@router.get("/nominal-income")
-async def get_nominal_income(request: Request, db: AsyncSession = Depends(get_db)):
+@router.get("/unrealized-income")
+async def get_unrealized_income(request: Request, db: AsyncSession = Depends(get_db)):
     """
-    Get current nominal income (Unrealized P/L) for all active positions.
+    Get current unrealized P/L for all active positions.
     Fetches LIVE data from broker instead of stale DB data.
     """
     # Access broker via trading_service from app.state
@@ -145,6 +145,8 @@ async def get_equity_performance(
     curr_qty = 0.0
     curr_avg_cost = 0.0
     curr_realized = 0.0
+    total_bought = 0.0  # Cumulative purchase amount (including commission)
+    total_sold = 0.0    # Cumulative sale amount (after commission)
     
     # Sort trades by time
     trade_idx = 0
@@ -175,31 +177,40 @@ async def get_equity_performance(
             # Apply Trade (with commission)
             if t.side == 'buy':
                 # Include commission in cost basis
-                total_val = (curr_qty * curr_avg_cost) + (t.qty * t.price) + t.commission
+                buy_cost = t.qty * t.price + t.commission
+                total_bought += buy_cost  # Accumulate total purchase
+                total_val = (curr_qty * curr_avg_cost) + buy_cost
                 curr_qty += t.qty
                 if curr_qty > 0:
                     curr_avg_cost = total_val / curr_qty
             elif t.side == 'sell':
-                # Subtract commission from realized income
-                qty_sold = min(t.qty, curr_qty)
+                # Use actual traded quantity (trade records are accurate)
+                qty_sold = t.qty
+                sell_revenue = t.price * qty_sold - t.commission
+                total_sold += sell_revenue  # Accumulate total sales
                 pl = (t.price - curr_avg_cost) * qty_sold - t.commission
                 curr_realized += pl
                 curr_qty -= qty_sold
-                if curr_qty <= 0:
-                    curr_qty = 0
+                # Allow negative qty for short selling scenarios
+                if curr_qty == 0:
                     curr_avg_cost = 0
             
             trade_idx += 1
             
         # Snapshot for this day
-        nominal_income = (c.close * curr_qty) - (curr_avg_cost * curr_qty)
+        current_value = c.close * curr_qty
+        unrealized_income = current_value - (curr_avg_cost * curr_qty)
+        nominal_income = current_value + total_sold - total_bought  # Total P/L
         
         history_data.append({
             "date": c_date.isoformat(),
             "price": c.close,
             "qty": curr_qty,
+            "unrealized_income": unrealized_income,
+            "realized_income": curr_realized,
             "nominal_income": nominal_income,
-            "realized_income": curr_realized
+            "total_bought": total_bought,
+            "total_sold": total_sold
         })
         
     return {
