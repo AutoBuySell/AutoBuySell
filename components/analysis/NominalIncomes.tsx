@@ -18,10 +18,10 @@ export default function NominalIncomes({ refreshTrigger }: { refreshTrigger?: nu
 
     const loadData = async () => {
         try {
-            const res = await statisticsApi.getNominalIncome();
+            const res = await statisticsApi.getUnrealizedIncome();
             setData(res);
         } catch (e) {
-            console.error("Failed to load nominal income", e);
+            console.error("Failed to load unrealized income", e);
         } finally {
             setLoading(false);
         }
@@ -32,7 +32,7 @@ export default function NominalIncomes({ refreshTrigger }: { refreshTrigger?: nu
     return (
         <Card>
             <CardHeader>
-                <CardTitle>Nominal Incomes (Unrealized P/L)</CardTitle>
+                <CardTitle>Unrealized P/L by Position</CardTitle>
             </CardHeader>
             <CardContent>
                 <div className="h-[300px] w-full">

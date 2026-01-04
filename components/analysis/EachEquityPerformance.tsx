@@ -89,10 +89,11 @@ export default function EachEquityPerformance() {
                 </div>
             </CardHeader>
             <CardContent>
-                <Tabs defaultValue="nominal" className="w-full">
-                    <TabsList className="grid w-full grid-cols-4 mb-4">
+                <Tabs defaultValue="unrealized" className="w-full">
+                    <TabsList className="grid w-full grid-cols-5 mb-4">
                         <TabsTrigger value="price">Price</TabsTrigger>
                         <TabsTrigger value="quantity">Quantity</TabsTrigger>
+                        <TabsTrigger value="unrealized">Unrealized</TabsTrigger>
                         <TabsTrigger value="nominal">Nominal</TabsTrigger>
                         <TabsTrigger value="realized">Realized</TabsTrigger>
                     </TabsList>
@@ -179,7 +180,47 @@ export default function EachEquityPerformance() {
                         ) : <NoDataMessage />}
                     </TabsContent>
                     
-                    {/* Nominal Income Tab */}
+                    {/* Unrealized Income Tab (previously Nominal) */}
+                    <TabsContent value="unrealized" className="h-[400px]">
+                        {data?.length > 0 ? (
+                            <ResponsiveContainer width="100%" height="100%">
+                                <LineChart data={data}>
+                                    <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
+                                    <XAxis 
+                                        dataKey="date" 
+                                        tickFormatter={(str) => str.split('T')[0]} 
+                                        minTickGap={30}
+                                        stroke="#888888" 
+                                        fontSize={12} 
+                                        tickLine={false} 
+                                        axisLine={false} 
+                                    />
+                                    <YAxis 
+                                        stroke="#888888" 
+                                        fontSize={12} 
+                                        tickLine={false} 
+                                        axisLine={false}
+                                        tickFormatter={(val) => `$${val}`}
+                                    />
+                                    <Tooltip 
+                                        labelFormatter={(label) => label.split('T')[0]}
+                                        contentStyle={commonTooltipStyle}
+                                        formatter={(value: number) => [`$${value.toFixed(2)}`, 'Unrealized P/L']}
+                                    />
+                                    <Line 
+                                        type="monotone" 
+                                        dataKey="unrealized_income" 
+                                        stroke="#22c55e" 
+                                        strokeWidth={2}
+                                        dot={false}
+                                        name="Unrealized P/L"
+                                    />
+                                </LineChart>
+                            </ResponsiveContainer>
+                        ) : <NoDataMessage />}
+                    </TabsContent>
+                    
+                    {/* Nominal (Total) Income Tab - NEW */}
                     <TabsContent value="nominal" className="h-[400px]">
                         {data?.length > 0 ? (
                             <ResponsiveContainer width="100%" height="100%">
@@ -204,15 +245,15 @@ export default function EachEquityPerformance() {
                                     <Tooltip 
                                         labelFormatter={(label) => label.split('T')[0]}
                                         contentStyle={commonTooltipStyle}
-                                        formatter={(value: number) => [`$${value.toFixed(2)}`, 'Nominal Income']}
+                                        formatter={(value: number) => [`$${value.toFixed(2)}`, 'Total P/L (Nominal)']}
                                     />
                                     <Line 
                                         type="monotone" 
                                         dataKey="nominal_income" 
-                                        stroke="#22c55e" 
+                                        stroke="#3b82f6" 
                                         strokeWidth={2}
                                         dot={false}
-                                        name="Nominal Income (Unrealized P/L)"
+                                        name="Total P/L (Nominal)"
                                     />
                                 </LineChart>
                             </ResponsiveContainer>
