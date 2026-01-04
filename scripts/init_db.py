@@ -101,6 +101,107 @@ async def seed_initial_data():
     print("✅ Initial data seeded successfully.")
 
 
+async def save_trade_sync_timestamp():
+    """
+    Save the trade sync cutoff timestamp to SystemState.
+    Only trades occurring after this timestamp will be synced from broker.
+    """
+    print("🕐 Saving trade sync timestamp...")
+    
+    from datetime import datetime, timezone
+    
+    STATE_KEY_TRADE_SYNC_AFTER = "trade_sync_after"
+    
+    async with AsyncSessionLocal() as db:
+        # Check if already exists
+        existing = await db.execute(
+            select(SystemState).where(SystemState.key == STATE_KEY_TRADE_SYNC_AFTER)
+        )
+        if existing.scalar_one_or_none():
+            print("  Trade sync timestamp already exists, skipping.")
+            return
+        
+        # Save current timestamp
+        init_timestamp = datetime.now(timezone.utc).isoformat()
+        state = SystemState(key=STATE_KEY_TRADE_SYNC_AFTER, value=init_timestamp)
+        db.add(state)
+        await db.commit()
+        print(f"  ✅ Trade sync timestamp saved: {init_timestamp}")
+
+
+async def sync_initial_positions():
+    """
+    Sync existing positions from broker and create virtual initial trades.
+    This captures holdings that existed before the system started tracking.
+    """
+    print("📊 Syncing initial positions from broker...")
+    
+    try:
+        from app.brokers.alpaca import AlpacaBroker
+        from app.domain.models import Position, Trade
+        from datetime import datetime, timezone, timedelta
+        
+        broker = AlpacaBroker()
+        positions = await broker.get_positions()
+        
+        if not positions:
+            print("  No existing positions found in broker.")
+            return
+        
+        async with AsyncSessionLocal() as db:
+            for pos in positions:
+                # Check if initial trade already exists
+                existing = await db.execute(
+                    select(Trade).where(
+                        Trade.symbol == pos.symbol,
+                        Trade.source == 'initial'
+                    )
+                )
+                if existing.scalar_one_or_none():
+                    print(f"  {pos.symbol}: Initial trade already exists, skipping.")
+                    continue
+                
+                # Create Position record
+                existing_pos = await db.execute(
+                    select(Position).where(Position.symbol == pos.symbol)
+                )
+                if not existing_pos.scalar_one_or_none():
+                    new_pos = Position(
+                        symbol=pos.symbol,
+                        qty=pos.qty,
+                        avg_entry_price=pos.avg_entry_price,
+                        current_price=pos.current_price,
+                        market_value=pos.market_value,
+                        unrealized_pl=pos.unrealized_pl,
+                        unrealized_plpc=pos.unrealized_plpc
+                    )
+                    db.add(new_pos)
+                
+                # Create virtual initial Trade
+                initial_timestamp = datetime.now(timezone.utc)
+                
+                initial_trade = Trade(
+                    order_id=None,
+                    symbol=pos.symbol,
+                    side='buy',
+                    qty=pos.qty,
+                    price=pos.avg_entry_price,
+                    commission=0.0,
+                    execution_id=f"initial_{pos.symbol}",
+                    source='initial',
+                    created_at=initial_timestamp
+                )
+                db.add(initial_trade)
+                print(f"  {pos.symbol}: Created initial trade for {pos.qty} shares @ ${pos.avg_entry_price:.2f}")
+            
+            await db.commit()
+        
+        print(f"✅ Initial positions synced: {len(positions)} positions processed.")
+    except Exception as e:
+        print(f"⚠️  Failed to sync initial positions: {e}")
+        print("  (This is expected if Alpaca credentials are not configured)")
+
+
 async def main(reset: bool = False):
     """Main initialization function."""
     print("=" * 60)
@@ -117,6 +218,8 @@ async def main(reset: bool = False):
     
     await create_all_tables()
     await seed_initial_data()
+    await sync_initial_positions()
+    await save_trade_sync_timestamp()
     
     # Show table count
     async with engine.connect() as conn:

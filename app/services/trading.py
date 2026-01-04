@@ -288,29 +288,64 @@ class TradingService:
         """
         Sync trade fills from broker to DB.
         Called periodically (every 1 hour) to capture all fills.
+        Detects external trades (made outside this system).
+        Only syncs trades that occurred AFTER the system initialization.
         """
         try:
-            from app.domain.models import Trade, Order
+            from app.domain.models import Trade, Order, SystemState
+            from datetime import datetime, timezone
             
             logger.info("Starting trade sync from broker...")
+            
+            # Get initialization timestamp - only sync trades after this point
+            trade_sync_after = None
+            result = await db.execute(
+                select(SystemState).where(SystemState.key == "trade_sync_after")
+            )
+            state = result.scalar_one_or_none()
+            if state:
+                trade_sync_after = datetime.fromisoformat(state.value)
+                logger.debug(f"Trade sync cutoff: {trade_sync_after}")
+            
             fills = await self.broker.get_trade_fills(limit=100)
             
             synced_count = 0
+            skipped_before_init = 0
+            external_count = 0
+            
             for fill in fills:
+                # Skip trades that occurred before initialization
+                if trade_sync_after and fill.executed_at < trade_sync_after:
+                    skipped_before_init += 1
+                    continue
+                
                 # Check if already recorded (by execution_id)
                 existing = await db.execute(
                     select(Trade).where(Trade.execution_id == fill.execution_id)
                 )
                 if existing.scalar_one_or_none():
                     continue  # Already synced
-                    
-                # Find associated order (optional)
+                
+                # Determine source: system or external
+                source = 'external'  # Default to external
                 order = None
+                
                 if fill.order_id:
                     order_result = await db.execute(
                         select(Order).where(Order.broker_order_id == fill.order_id)
                     )
                     order = order_result.scalar_one_or_none()
+                    
+                    if order:
+                        source = 'system'  # Found in our Orders table
+                    else:
+                        # Order ID exists but not in our system = external trade
+                        logger.warning(f"External trade detected: {fill.symbol} {fill.side} {fill.qty}@{fill.price}")
+                        external_count += 1
+                else:
+                    # No order_id at all = likely external or edge case
+                    logger.warning(f"Trade without order_id: {fill.symbol} {fill.side} {fill.qty}")
+                    external_count += 1
                 
                 # Create trade record
                 trade = Trade(
@@ -321,13 +356,15 @@ class TradingService:
                     price=fill.price,
                     commission=fill.commission,  # 0.0 for retail
                     execution_id=fill.execution_id,
+                    source=source,
                     created_at=fill.executed_at
                 )
                 db.add(trade)
                 synced_count += 1
             
             await db.commit()
-            logger.info(f"Trade sync completed: {synced_count} new trades recorded")
+            logger.info(f"Trade sync completed: {synced_count} new trades "
+                       f"({external_count} external, {skipped_before_init} skipped pre-init)")
             
         except Exception as e:
             logger.error(f"Failed to sync trades: {e}")

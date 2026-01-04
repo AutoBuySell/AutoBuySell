@@ -127,13 +127,18 @@ class Trade(TimeStampedBase):
     """Executed Trades (Fills)"""
     __tablename__ = "trades"
     
-    order_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("orders.id"))
+    order_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("orders.id"), nullable=True)
     symbol: Mapped[str] = mapped_column(String(20), index=True)
     side: Mapped[str] = mapped_column(String(10))
     qty: Mapped[float] = mapped_column(Float)
     price: Mapped[float] = mapped_column(Float)
     commission: Mapped[float] = mapped_column(Float, default=0.0)
     execution_id: Mapped[Optional[str]] = mapped_column(String(100)) # Broker's execution ID
+    source: Mapped[str] = mapped_column(String(20), default='system')
+    # 'system' = Trade from system order
+    # 'external' = Trade from external order (Alpaca web/app)
+    # 'initial' = Virtual trade for initial position
+
 
 # --- Logging (Split by type) ---
 

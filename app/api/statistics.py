@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from typing import List, Optional
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from app.core.database import get_db
 from app.domain.models import Position, Trade, Candle
@@ -44,7 +44,7 @@ async def get_equity_performance(
     Reconstructs daily state from Trades and Candles.
     """
     # 1. Determine Date Range
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     start_date = now - timedelta(days=30)
     if period == "1W": start_date = now - timedelta(days=7)
     elif period == "3M": start_date = now - timedelta(days=90)

@@ -12,7 +12,7 @@ Usage:
 
 import asyncio
 import argparse
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import random
 import uuid
 import sys
@@ -41,7 +41,7 @@ async def inject_test_data(
             await db.commit()
         
         # Generate trades over the past 3 months
-        base_date = datetime.utcnow() - timedelta(days=90)
+        base_date = datetime.now(timezone.utc) - timedelta(days=90)
         base_price = random.uniform(100, 500)
         
         print(f"\n📈 Injecting {num_trades} test trades for {symbol}...")
@@ -82,6 +82,7 @@ async def inject_test_data(
                 price=round(price, 2),
                 commission=commission,
                 execution_id=str(uuid.uuid4()),
+                source='system',  # Test data = simulated system trades
                 created_at=trade_date
             )
             db.add(trade)

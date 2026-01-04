@@ -2,7 +2,7 @@ from typing import List, Optional
 from app.brokers.base import OrderRequest, AccountInfo
 from app.domain.models import LogEntry
 from sqlalchemy.ext.asyncio import AsyncSession
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 
 class RiskException(Exception):
@@ -47,7 +47,7 @@ class RiskManager:
             source="RiskManager",
             message=f"Order Rejected: {reason}",
             context=order.model_dump(),
-            created_at=datetime.utcnow()
+            created_at=datetime.now(timezone.utc)
         )
         db.add(entry)
         await db.commit()
