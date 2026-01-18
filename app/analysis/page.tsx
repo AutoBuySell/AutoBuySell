@@ -5,7 +5,7 @@ import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { backtestApi, BacktestRun, BacktestResult, dataApi, SymbolInfo, tradingApi, PortfolioHistory, Position } from '@/lib/api';
 import { wsClient } from '@/lib/websocket';
 import { 
-    LineChart, Line, AreaChart, Area, PieChart, Pie, Cell, 
+    ComposedChart, Line, AreaChart, Area, PieChart, Pie, Cell, 
     XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend 
 } from 'recharts';
 
@@ -27,6 +27,8 @@ export default function AnalysisPage() {
   const [selectedRun, setSelectedRun] = useState<BacktestResult | null>(null);
   const [backtestProgress, setBacktestProgress] = useState<number>(0);
   const [currentRunId, setCurrentRunId] = useState<string | null>(null);
+  const [showSignals, setShowSignals] = useState(false);
+  const [showOrders, setShowOrders] = useState(false);
   
   const [form, setForm] = useState({
     strategy: '',
@@ -181,10 +183,30 @@ export default function AnalysisPage() {
               timeframes: [timeframe]  // Use strategy's timeframe
           });
           
-          // Wait a bit for background download to complete
-          await new Promise(r => setTimeout(r, 5000));
+          const waitForAvailability = async () => {
+              const maxAttempts = 30;
+              const delayMs = 2000;
+              for (let i = 0; i < maxAttempts; i += 1) {
+                  const stillMissing = await dataApi.checkDataAvailability(
+                      missingSymbolsForDownload,
+                      form.startDate,
+                      form.endDate,
+                      timeframe
+                  );
+                  if (stillMissing.length === 0) {
+                      return true;
+                  }
+                  await new Promise(r => setTimeout(r, delayMs));
+              }
+              return false;
+          };
           
-          // Now run the backtest
+          const ready = await waitForAvailability();
+          if (!ready) {
+              alert('Download is taking longer than expected. Please retry later.');
+              return;
+          }
+          
           await executeBacktest(pendingSymbolsList);
       } catch (e) {
           console.error('Download error:', e);
@@ -239,6 +261,115 @@ export default function AnalysisPage() {
       time: new Date(t * 1000).toLocaleDateString(),
       equity: history.equity[i]
   })) || [];
+
+  const equityCurveRaw = selectedRun?.result?.equity_curve || [];
+  const trades = selectedRun?.result?.metrics?.trades || [];
+  const signals = selectedRun?.result?.metrics?.signals || [];
+  const normalizeDateKey = (value: string) => {
+      if (!value) return '';
+      const byT = value.split('T')[0];
+      return byT.split(' ')[0];
+  };
+  const signalsByDate = new Map<string, any[]>();
+  const ordersByDate = new Map<string, any[]>();
+
+  signals.forEach((signal: any) => {
+      const dateKey = normalizeDateKey(String(signal.time || ''));
+      if (!signalsByDate.has(dateKey)) {
+          signalsByDate.set(dateKey, []);
+      }
+      signalsByDate.get(dateKey)?.push(signal);
+  });
+
+  trades.forEach((trade: any) => {
+      const dateKey = normalizeDateKey(String(trade.time || ''));
+      if (!ordersByDate.has(dateKey)) {
+          ordersByDate.set(dateKey, []);
+      }
+      ordersByDate.get(dateKey)?.push(trade);
+  });
+
+  const equityCurve = equityCurveRaw
+      .map((point) => {
+          const dateKey = normalizeDateKey(point.time);
+          return {
+              ...point,
+              timeMs: new Date(point.time).getTime(),
+              signals: signalsByDate.get(dateKey) || [],
+              orders: ordersByDate.get(dateKey) || []
+          };
+      })
+      .filter((point) => Number.isFinite(point.timeMs))
+      .sort((a, b) => a.timeMs - b.timeMs);
+
+  const renderEventDot = (props: any) => {
+      const { cx, cy, payload } = props;
+      if (cx == null || cy == null) return null;
+      const hasSignals = showSignals && payload?.signals?.length;
+      const hasOrders = showOrders && payload?.orders?.length;
+      if (!hasSignals && !hasOrders) return null;
+      const dots = [];
+      if (hasSignals) {
+          dots.push({
+              key: 'signal',
+              fill: '#16a34a',
+              offsetX: hasOrders ? -4 : 0
+          });
+      }
+      if (hasOrders) {
+          dots.push({
+              key: 'order',
+              fill: '#f59e0b',
+              offsetX: hasSignals ? 4 : 0
+          });
+      }
+      return (
+          <g>
+              {dots.map((dot) => (
+                  <circle
+                      key={dot.key}
+                      cx={cx + dot.offsetX}
+                      cy={cy}
+                      r={4}
+                      fill={dot.fill}
+                      stroke="#ffffff"
+                      strokeWidth={1}
+                  />
+              ))}
+          </g>
+      );
+  };
+
+  const renderTooltip = ({ active, payload }: any) => {
+      if (!active || !payload?.length) return null;
+      const point = payload[0].payload;
+      const dateLabel = new Date(point.timeMs).toLocaleDateString();
+      const signalItems = showSignals ? point.signals || [] : [];
+      const orderItems = showOrders ? point.orders || [] : [];
+      const hasEvents = signalItems.length > 0 || orderItems.length > 0;
+
+      return (
+          <div className="rounded border bg-white p-2 text-xs text-black shadow">
+              <div className="font-semibold">{dateLabel}</div>
+              {hasEvents ? (
+                  <div className="mt-1 space-y-1">
+                      {signalItems.map((signal: any, idx: number) => (
+                          <div key={`signal-${idx}`} className="text-green-700">
+                              Signal {signal.type} @ ${Number(signal.price).toFixed(2)}
+                          </div>
+                      ))}
+                      {orderItems.map((order: any, idx: number) => (
+                          <div key={`order-${idx}`} className="text-amber-700">
+                              Order {order.type} @ ${Number(order.price).toFixed(2)}
+                          </div>
+                      ))}
+                  </div>
+              ) : (
+                  <div className="mt-1">Equity: ${Number(point.equity).toFixed(2)}</div>
+              )}
+          </div>
+      );
+  };
 
   return (
     <div className="space-y-6">
@@ -434,13 +565,36 @@ export default function AnalysisPage() {
                                 </div>
                             </div>
     
-                            <div className="h-[400px] w-full border rounded p-2">
-                                <ResponsiveContainer width="100%" height="100%">
-                                    <LineChart data={selectedRun.result?.equity_curve}>
+                            <div className="h-[400px] w-full border rounded p-2 flex flex-col">
+                                <div className="flex items-center gap-4 px-2 pb-2 text-sm">
+                                    <label className="flex items-center gap-2">
+                                        <input
+                                            type="checkbox"
+                                            checked={showSignals}
+                                            onChange={(e) => setShowSignals(e.target.checked)}
+                                        />
+                                        Signals
+                                    </label>
+                                    <label className="flex items-center gap-2">
+                                        <input
+                                            type="checkbox"
+                                            checked={showOrders}
+                                            onChange={(e) => setShowOrders(e.target.checked)}
+                                        />
+                                        Orders
+                                    </label>
+                                </div>
+                                <div className="flex-1">
+                                    <ResponsiveContainer width="100%" height="100%">
+                                        <ComposedChart data={equityCurve}>
                                         <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
                                         <XAxis 
-                                            dataKey="time" 
-                                            tickFormatter={(str) => str.split('T')[0]} 
+                                            dataKey="timeMs"
+                                            type="number"
+                                            scale="time"
+                                            domain={['dataMin', 'dataMax']}
+                                            xAxisId="main"
+                                            tickFormatter={(value) => new Date(value).toLocaleDateString()}
                                             minTickGap={30}
                                             stroke="#888888"
                                             fontSize={12}
@@ -449,6 +603,7 @@ export default function AnalysisPage() {
                                         />
                                         <YAxis 
                                             domain={['auto', 'auto']}
+                                            yAxisId="main"
                                             stroke="#888888"
                                             fontSize={12}
                                             tickLine={false}
@@ -456,23 +611,32 @@ export default function AnalysisPage() {
                                             tickFormatter={(value) => `$${value}`}
                                         />
                                         <Tooltip 
-                                            labelFormatter={(label) => label.split('T')[0]}
-                                            contentStyle={{
-                                                backgroundColor: 'rgba(255, 255, 255, 0.95)',
-                                                border: '1px solid #ccc',
-                                                borderRadius: '4px',
-                                                color: '#000'
-                                            }}
+                                            content={renderTooltip}
                                         />
                                         <Line 
                                             type="monotone" 
                                             dataKey="equity" 
+                                            xAxisId="main"
+                                            yAxisId="main"
                                             stroke="#2563eb" 
                                             strokeWidth={2}
                                             dot={false}
+                                            activeDot={!(showSignals || showOrders)}
+                                            isAnimationActive={false}
                                         />
-                                    </LineChart>
-                                </ResponsiveContainer>
+                                        <Line
+                                            type="monotone"
+                                            dataKey="equity"
+                                            xAxisId="main"
+                                            yAxisId="main"
+                                            stroke="transparent"
+                                            dot={renderEventDot}
+                                            activeDot={false}
+                                            isAnimationActive={false}
+                                        />
+                                        </ComposedChart>
+                                    </ResponsiveContainer>
+                                </div>
                             </div>
                         </div>
                     ) : (

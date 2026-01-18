@@ -81,6 +81,7 @@ export interface BacktestResult {
         equity_curve: Array<{time: string, equity: number}>;
         metrics: {
             trades: Array<any>;
+            signals?: Array<any>;
         };
     } | null;
 }
