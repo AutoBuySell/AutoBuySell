@@ -69,24 +69,7 @@ class BacktestService:
         await self.db.refresh(run_record)
         
         try:
-            # 3. Download Data for ALL symbols (ensures complete coverage for period)
-            # DataService handles deduplication via upsert
-            logger.info(f"Downloading data for backtest period: {symbols} from {start_date} to {end_date}")
-            from app.services.data import DataService
-            data_service = DataService(self.db)
-            
-            try:
-                await data_service.download_historical(
-                    symbols=symbols,
-                    start_date=start_date,
-                    end_date=end_date,
-                    timeframe=strategy.timeframe
-                )
-                logger.info("Data download completed.")
-            except Exception as download_err:
-                logger.warning(f"Data download failed (will try with existing data): {download_err}")
-            
-            # 4. Load Data for ALL symbols
+            # 3. Load Data for ALL symbols
             # We need to fetch candles for each symbol and align them by time.
             candle_map = {} # { date: { symbol: Candle } }
             all_candles_by_symbol = {} # { symbol: [Candle] } for history slicing
@@ -121,6 +104,7 @@ class BacktestService:
             positions = {} # { symbol: qty }
             equity_curve = []
             trades = []
+            signals_log = []
             
             # Initialize Strategy
             # Note: stateless strategies usually don't need re-init per symbol if they don't store internal state.
@@ -193,6 +177,14 @@ class BacktestService:
                     
                     # Generate Signals
                     signals = await strategy.on_bar(context, current_slice)
+                    for sig in signals:
+                        signals_log.append({
+                            "symbol": sym,
+                            "type": sig.type.value,
+                            "time": current_candle.timestamp,
+                            "price": current_candle.close,
+                            "confidence": sig.confidence
+                        })
                     
                     # Execute Signals
                     for sig in signals:
@@ -279,6 +271,9 @@ class BacktestService:
                 metrics={"trades": [
                     {k: str(v) if isinstance(v, (datetime, date)) else v for k,v in t.items()} 
                     for t in trades
+                ], "signals": [
+                    {k: str(v) if isinstance(v, (datetime, date)) else v for k,v in s.items()} 
+                    for s in signals_log
                 ]} 
             )
             self.db.add(result_record)

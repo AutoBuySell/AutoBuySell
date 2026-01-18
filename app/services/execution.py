@@ -1,12 +1,15 @@
 from typing import List
+import logging
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.strategies.base import StrategySignal
+from app.strategies.base import StrategySignal, SignalType
 from app.brokers.base import BrokerAdapter, OrderRequest, AccountInfo
 from app.services.risk import RiskManager, RiskException
 from app.domain.models import Order, SignalLog, LogEntry
 from datetime import datetime
 import uuid
 from app.api.ws import manager
+
+logger = logging.getLogger(__name__)
 
 class ExecutionService:
     """
@@ -19,7 +22,7 @@ class ExecutionService:
 
     async def process_signal(self, db: AsyncSession, signal: StrategySignal):
         """Process a single signal (qty already calculated)"""
-        if signal.signal_type == SignalType.HOLD:
+        if signal.type == SignalType.HOLD:
             return
         
         # Log the Signal first
@@ -28,9 +31,10 @@ class ExecutionService:
         qty = signal.qty  # Already calculated by strategy
         
         if qty <= 0:
+            await db.commit()
             return
         
-        side = 'buy' if signal.signal_type == SignalType.BUY else 'sell'
+        side = 'buy' if signal.type == SignalType.BUY else 'sell'
         order_req = OrderRequest(
             symbol=signal.symbol,
             qty=qty,
@@ -43,6 +47,7 @@ class ExecutionService:
         
         if price_estimate == 0.0:
             logger.warning(f"No current_price in signal metadata for {signal.symbol}, skipping")
+            await db.commit()
             return
         
         try:
@@ -95,7 +100,7 @@ class ExecutionService:
         log = SignalLog(
             strategy_name=signal.strategy_name,
             symbol=signal.symbol,
-            signal_type=signal.signal_type.name,
+            signal_type=signal.type.name,
             signal_strength=signal.confidence,
             raw_data=signal.metadata
         )

@@ -3,6 +3,7 @@ from sqlalchemy import select
 from datetime import datetime, timedelta
 from typing import List
 import logging
+import traceback
 import asyncio
 
 from app.core.database import AsyncSessionLocal
@@ -458,6 +459,10 @@ class TradingService:
                 level="ERROR",
                 source="TradingService",
                 message=f"Error processing {ticker}: {str(e)}",
-                context={"symbol": ticker, "error": str(e)}
+                context={
+                    "symbol": ticker,
+                    "error": str(e),
+                    "traceback": traceback.format_exc()
+                }
             ))
             await db.commit()
