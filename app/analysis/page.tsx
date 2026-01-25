@@ -265,38 +265,39 @@ export default function AnalysisPage() {
   const equityCurveRaw = selectedRun?.result?.equity_curve || [];
   const trades = selectedRun?.result?.metrics?.trades || [];
   const signals = selectedRun?.result?.metrics?.signals || [];
-  const normalizeDateKey = (value: string) => {
+  const normalizeTimeKey = (value: string) => {
       if (!value) return '';
-      const byT = value.split('T')[0];
-      return byT.split(' ')[0];
+      const parsed = new Date(value).getTime();
+      if (!Number.isFinite(parsed)) return '';
+      return String(parsed);
   };
-  const signalsByDate = new Map<string, any[]>();
-  const ordersByDate = new Map<string, any[]>();
+  const signalsByTime = new Map<string, any[]>();
+  const ordersByTime = new Map<string, any[]>();
 
   signals.forEach((signal: any) => {
-      const dateKey = normalizeDateKey(String(signal.time || ''));
-      if (!signalsByDate.has(dateKey)) {
-          signalsByDate.set(dateKey, []);
+      const timeKey = normalizeTimeKey(String(signal.time || ''));
+      if (!signalsByTime.has(timeKey)) {
+          signalsByTime.set(timeKey, []);
       }
-      signalsByDate.get(dateKey)?.push(signal);
+      signalsByTime.get(timeKey)?.push(signal);
   });
 
   trades.forEach((trade: any) => {
-      const dateKey = normalizeDateKey(String(trade.time || ''));
-      if (!ordersByDate.has(dateKey)) {
-          ordersByDate.set(dateKey, []);
+      const timeKey = normalizeTimeKey(String(trade.time || ''));
+      if (!ordersByTime.has(timeKey)) {
+          ordersByTime.set(timeKey, []);
       }
-      ordersByDate.get(dateKey)?.push(trade);
+      ordersByTime.get(timeKey)?.push(trade);
   });
 
   const equityCurve = equityCurveRaw
       .map((point) => {
-          const dateKey = normalizeDateKey(point.time);
+          const timeKey = normalizeTimeKey(point.time);
           return {
               ...point,
               timeMs: new Date(point.time).getTime(),
-              signals: signalsByDate.get(dateKey) || [],
-              orders: ordersByDate.get(dateKey) || []
+              signals: signalsByTime.get(timeKey) || [],
+              orders: ordersByTime.get(timeKey) || []
           };
       })
       .filter((point) => Number.isFinite(point.timeMs))
@@ -343,7 +344,7 @@ export default function AnalysisPage() {
   const renderTooltip = ({ active, payload }: any) => {
       if (!active || !payload?.length) return null;
       const point = payload[0].payload;
-      const dateLabel = new Date(point.timeMs).toLocaleDateString();
+      const dateLabel = new Date(point.timeMs).toLocaleString();
       const signalItems = showSignals ? point.signals || [] : [];
       const orderItems = showOrders ? point.orders || [] : [];
       const hasEvents = signalItems.length > 0 || orderItems.length > 0;
@@ -594,7 +595,7 @@ export default function AnalysisPage() {
                                             scale="time"
                                             domain={['dataMin', 'dataMax']}
                                             xAxisId="main"
-                                            tickFormatter={(value) => new Date(value).toLocaleDateString()}
+                                            tickFormatter={(value) => new Date(value).toLocaleString()}
                                             minTickGap={30}
                                             stroke="#888888"
                                             fontSize={12}
