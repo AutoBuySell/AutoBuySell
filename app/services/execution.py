@@ -1,11 +1,12 @@
 from typing import List
 import logging
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 from app.strategies.base import StrategySignal, SignalType
 from app.brokers.base import BrokerAdapter, OrderRequest, AccountInfo
 from app.services.risk import RiskManager, RiskException
-from app.domain.models import Order, SignalLog, LogEntry
-from datetime import datetime
+from app.domain.models import Order, SignalLog, LogEntry, SystemState
+from datetime import datetime, timezone
 import uuid
 from app.api.ws import manager
 
@@ -74,6 +75,14 @@ class ExecutionService:
             
             # Log success
             db.add(LogEntry(level="INFO", source="Execution", message=f"Order Placed: {result.client_order_id}"))
+
+            if signal.type == SignalType.BUY:
+                bar_ts = self._resolve_bar_timestamp(signal)
+                await self._set_last_buy_ts(db, signal.symbol, bar_ts)
+
+            if signal.type == SignalType.SELL:
+                bar_ts = self._resolve_bar_timestamp(signal)
+                await self._set_last_sell_ts(db, signal.symbol, bar_ts)
             
             # Broadcast via WebSocket
             await manager.broadcast({
@@ -95,6 +104,46 @@ class ExecutionService:
             db.add(LogEntry(level="ERROR", source="Execution", message=f"Failed to process signal: {str(e)}"))
         
         await db.commit()
+
+    def _coerce_timestamp(self, value) -> datetime | None:
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, str):
+            try:
+                return datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError:
+                return None
+        return None
+
+    def _resolve_bar_timestamp(self, signal: StrategySignal) -> datetime:
+        bar_ts = self._coerce_timestamp(signal.metadata.get("bar_timestamp"))
+        if not bar_ts:
+            bar_ts = signal.timestamp
+        if bar_ts.tzinfo is None:
+            bar_ts = bar_ts.replace(tzinfo=timezone.utc)
+        return bar_ts
+
+    async def _set_last_buy_ts(self, db: AsyncSession, symbol: str, ts: datetime):
+        key = f"last_buy_ts:{symbol}"
+        result = await db.execute(
+            select(SystemState).where(SystemState.key == key)
+        )
+        state = result.scalar_one_or_none()
+        if state:
+            state.value = ts.isoformat()
+        else:
+            db.add(SystemState(key=key, value=ts.isoformat()))
+
+    async def _set_last_sell_ts(self, db: AsyncSession, symbol: str, ts: datetime):
+        key = f"last_sell_ts:{symbol}"
+        result = await db.execute(
+            select(SystemState).where(SystemState.key == key)
+        )
+        state = result.scalar_one_or_none()
+        if state:
+            state.value = ts.isoformat()
+        else:
+            db.add(SystemState(key=key, value=ts.isoformat()))
 
     async def _log_signal(self, db: AsyncSession, signal: StrategySignal):
         log = SignalLog(

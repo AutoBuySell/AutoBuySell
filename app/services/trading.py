@@ -1,6 +1,6 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List
 import logging
 import traceback
@@ -285,6 +285,39 @@ class TradingService:
         async with AsyncSessionLocal() as db:
             await self.sync_trades(db)
 
+    async def _get_last_buy_ts(self, db: AsyncSession, symbol: str) -> datetime | None:
+        key = f"last_buy_ts:{symbol}"
+        result = await db.execute(
+            select(SystemState).where(SystemState.key == key)
+        )
+        state = result.scalar_one_or_none()
+        if not state or not state.value:
+            return None
+        try:
+            return datetime.fromisoformat(state.value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+
+    async def _get_last_sell_ts(self, db: AsyncSession, symbol: str) -> datetime | None:
+        key = f"last_sell_ts:{symbol}"
+        result = await db.execute(
+            select(SystemState).where(SystemState.key == key)
+        )
+        state = result.scalar_one_or_none()
+        if not state or not state.value:
+            return None
+        try:
+            return datetime.fromisoformat(state.value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+
+    def _filter_candles_after(self, candles: List[Candle], ts: datetime | None) -> List[Candle]:
+        if not ts:
+            return candles
+        if candles and candles[0].timestamp.tzinfo is None and ts.tzinfo is not None:
+            ts = ts.replace(tzinfo=None)
+        return [c for c in candles if c.timestamp > ts]
+
     async def sync_trades(self, db: AsyncSession):
         """
         Sync trade fills from broker to DB.
@@ -421,9 +454,28 @@ class TradingService:
                     volume=b.volume
                 ))
 
-            # Generate Signals
             context = StrategyContext(symbol=ticker, account=account)
-            signals = await strategy.on_bar(context, candles)
+            signals: List[StrategySignal] = []
+
+            last_buy_ts = await self._get_last_buy_ts(db, ticker)
+            last_sell_ts = await self._get_last_sell_ts(db, ticker)
+
+            buy_slice = self._filter_candles_after(candles, last_buy_ts)
+            sell_slice = self._filter_candles_after(candles, last_sell_ts)
+
+            buy_signals = await strategy.on_bar(context, buy_slice)
+            for signal in buy_signals:
+                if signal.type == SignalType.BUY:
+                    if buy_slice:
+                        signal.metadata.setdefault("bar_timestamp", buy_slice[-1].timestamp)
+                    signals.append(signal)
+
+            sell_signals = await strategy.on_bar(context, sell_slice)
+            for signal in sell_signals:
+                if signal.type == SignalType.SELL:
+                    if sell_slice:
+                        signal.metadata.setdefault("bar_timestamp", sell_slice[-1].timestamp)
+                    signals.append(signal)
             
             if not signals:
                 return
@@ -438,7 +490,7 @@ class TradingService:
                 # Get latest account info (previous execution may have changed balance)
                 account = await self.broker.get_account_info()
                 position_qty = await self._get_position_qty(db, signal.symbol)
-                
+
                 # Calculate quantity
                 signal.qty = strategy.calculate_quantity(signal, account, position_qty)
                 

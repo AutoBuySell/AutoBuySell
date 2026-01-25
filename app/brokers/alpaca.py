@@ -133,21 +133,24 @@ class AlpacaBroker(BrokerAdapter):
         # Calculate start time roughly based on limit
         # This is tricky for exact "last N bars", but we can fetch a bit more and slice.
         # For '1d', 100 days ago.
-        from datetime import datetime, timedelta
+        from datetime import datetime, timedelta, timezone
         if tf_normalized in ["1day", "1d"]:
-            start = datetime.now() - timedelta(days=limit * 2) 
+            start = datetime.now(timezone.utc) - timedelta(days=limit * 2) 
         else:
-            start = datetime.now() - timedelta(days=7) # fallback
+            start = datetime.now(timezone.utc) - timedelta(days=7) # fallback
             
         req = StockBarsRequest(
             symbol_or_symbols=symbol,
             timeframe=alpaca_tf,
             start=start,
-            limit=limit
+            limit=limit,
+            feed="iex",
+            adjustment="raw"
         )
         
         bars = client.get_stock_bars(req)
-        return bars[symbol] if symbol in bars else []
+
+        return bars[symbol]
 
     async def get_portfolio_history(self, period: str = "1M", timeframe: str = "1D") -> Any:
         # Use trading_client.get_portfolio_history with correct Request object
@@ -220,4 +223,3 @@ class AlpacaBroker(BrokerAdapter):
             ))
         
         return fills
-
