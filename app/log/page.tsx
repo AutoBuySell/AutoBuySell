@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
-import { logApi } from '@/lib/api';
+import { logApi, type LogEntry } from '@/lib/api';
 
 type LogTab = 'trades' | 'signals' | 'system';
 
@@ -29,13 +29,7 @@ interface SignalLog {
     created_at: string;
 }
 
-interface SystemLog {
-    id: string;
-    level: string;
-    source: string;
-    message: string;
-    created_at: string;
-}
+type SystemLog = LogEntry;
 
 export default function LogPage() {
     const [activeTab, setActiveTab] = useState<LogTab>('trades');
@@ -211,8 +205,8 @@ export default function LogPage() {
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {systemLogs.map(l => (
-                                        <tr key={l.id} className="border-b">
+                                    {systemLogs.map((l, index) => (
+                                        <tr key={`${l.created_at}-${index}`} className="border-b">
                                             <td className="p-2 text-muted-foreground">{new Date(l.created_at).toLocaleString()}</td>
                                             <td className="p-2">
                                                 <span className={`px-2 py-0.5 rounded text-xs ${

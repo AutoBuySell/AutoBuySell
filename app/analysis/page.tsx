@@ -305,10 +305,10 @@ export default function AnalysisPage() {
 
   const renderEventDot = (props: any) => {
       const { cx, cy, payload } = props;
-      if (cx == null || cy == null) return null;
+      if (cx == null || cy == null) return <g />;
       const hasSignals = showSignals && payload?.signals?.length;
       const hasOrders = showOrders && payload?.orders?.length;
-      if (!hasSignals && !hasOrders) return null;
+      if (!hasSignals && !hasOrders) return <g />;
       const dots = [];
       if (hasSignals) {
           dots.push({

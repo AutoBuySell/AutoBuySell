@@ -1,13 +1,32 @@
-FROM node:20-alpine
+FROM node:20-alpine AS deps
 
 WORKDIR /app
 
-# Install dependencies based on package.json
 COPY package.json package-lock.json* ./
 RUN npm install
 
-# Copy source code
-COPY . .
+FROM node:20-alpine AS builder
 
-# Build not needed for dev, but good practice to have available or just run dev
-CMD ["npm", "run", "dev"]
+WORKDIR /app
+
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+RUN mkdir -p public
+RUN npm run build
+
+FROM node:20-alpine AS runner
+
+WORKDIR /app
+
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+
+COPY package.json package-lock.json* ./
+RUN npm install --omit=dev
+
+COPY --from=builder /app/.next ./.next
+COPY --from=builder /app/public ./public
+
+EXPOSE 3000
+
+CMD ["npm", "start"]
