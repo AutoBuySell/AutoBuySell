@@ -1,0 +1,4 @@
+check_idx,timestamp_kst,new_is_running,new_next_run,old_alarm_http,old_data_alarm_http,log_signals_cnt,orders_cnt,log_system_cnt,trades_cnt,new_equity,new_cash,old_equity,old_cash
+1,2026-03-05 00:21:53,true,2026-03-04 15:24:04.460396+00:00,200,200,0,0,0,0,10003.12,8383,10003.12,8383
+2,2026-03-05 00:32:01,true,2026-03-04 15:33:04.460396+00:00,200,200,0,0,0,0,10026.5,8383,10026.5,8383
+3,2026-03-05 00:42:10,true,2026-03-04 15:45:04.460396+00:00,200,200,0,0,0,0,10034.72,8383,10034.91,8383
