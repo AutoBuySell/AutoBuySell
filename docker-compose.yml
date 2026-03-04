@@ -1,0 +1,59 @@
+services:
+  db:
+    image: postgres:16
+    container_name: autobuysell_db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-autosys}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-autosys}
+      POSTGRES_DB: ${POSTGRES_DB:-autosys}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - trading-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U autosys"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: 
+      context: ./api
+      dockerfile: Dockerfile
+    container_name: autobuysell_api
+    env_file: .env
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-autosys}:${POSTGRES_PASSWORD:-autosys}@db:5432/${POSTGRES_DB:-autosys}
+    volumes:
+      - ./api:/app
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - trading-net
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --log-config /app/logging_config.json
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: autobuysell_frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+    depends_on:
+      - api
+    networks:
+      - trading-net
+
+volumes:
+  postgres_data:
+
+networks:
+  trading-net:
+    driver: bridge

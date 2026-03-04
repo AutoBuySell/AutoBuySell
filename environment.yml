@@ -1,0 +1,19 @@
+name: autobuysell_new
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.12
+  - pip
+  - pip:
+    - fastapi
+    - uvicorn[standard]
+    - sqlalchemy[asyncio]
+    - asyncpg
+    - alembic
+    - pydantic
+    - pydantic-settings
+    - pandas
+    - numpy
+    - alpaca-trade-api
+    - python-multipart
