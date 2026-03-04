@@ -38,7 +38,7 @@ class MeanReversionStrategy(Strategy):
         self.params.update(params)
 
     async def on_bar(self, context: StrategyContext, candles: List[Candle]) -> List[StrategySignal]:
-        if not candles or len(candles) < self.params["duration"] + 1:
+        if not candles or len(candles) < 2:
             return []
 
         # Use open or close based on price_type parameter (legacy used 'open')
@@ -47,17 +47,28 @@ class MeanReversionStrategy(Strategy):
             prices = np.array([c.open for c in candles])
         else:
             prices = np.array([c.close for c in candles])
-        
+
         current_price = prices[-1]
-        
-        # Slicing: [-(duration + 1) : -1] -> Lookback window EXCLUDING current bar
-        # Legacy: data_np = data_np[max(-(len(data_np) - asset.start_point), -(1 + asset.settings['duration'])):-1]
+
+        # Legacy parity with old/judge.py start_point handling:
+        # data_np = data_np[max(-(len(data_np) - start_point), -(1 + duration)):-1]
         lookback = self.params["duration"]
-        # Ensure we have enough data
-        if len(prices) < lookback + 1:
+        start_point_ts = context.params.get("start_point_ts")
+        start_idx = 0
+        if start_point_ts:
+            for i, c in enumerate(candles):
+                if c.timestamp >= start_point_ts:
+                    start_idx = i
+                    break
+
+        # Equivalent negative slicing translated to positive indices
+        start_by_duration = max(0, len(prices) - (lookback + 1))
+        start = max(start_idx, start_by_duration)
+        reference_window = prices[start:-1]
+
+        if len(reference_window) == 0:
             return []
-            
-        reference_window = prices[-(lookback + 1) : -1]
+
         prev_price = reference_window[-1]
         
         min_price = np.min(reference_window)
@@ -98,6 +109,7 @@ class MeanReversionStrategy(Strategy):
                     "drop_pct": float(1 - current_price/max_price),
                     "current_price": float(current_price),
                     "moving_avg": float(np.mean(reference_window)),
+                    "prev_bar_timestamp": candles[-2].timestamp,
                     # Pass strategy params for position sizing
                     "max_position_pct": self.params.get("max_position_pct", 0.20),
                     "scale_factor": self.params.get("scale_factor", 200.0),
@@ -132,6 +144,7 @@ class MeanReversionStrategy(Strategy):
                     "rise_pct": float(current_price/min_price - 1),
                     "current_price": float(current_price),
                     "moving_avg": float(np.mean(reference_window)),
+                    "prev_bar_timestamp": candles[-2].timestamp,
                     # Pass strategy params for position sizing
                     "max_position_pct": self.params.get("max_position_pct", 0.20),
                     "scale_factor": self.params.get("scale_factor", 200.0),

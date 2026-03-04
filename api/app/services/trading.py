@@ -30,7 +30,8 @@ class TradingService:
         self.scheduler = AsyncIOScheduler()
         self.is_running = False
         self.job_id = None
-        
+        self.start_point_ts = {}  # Legacy parity: per-symbol anchor after executed order
+
         # Use centralized strategy registry
         self.strategies = get_all_strategies()
         
@@ -454,37 +455,25 @@ class TradingService:
                     volume=b.volume
                 ))
 
-            context = StrategyContext(symbol=ticker, account=account)
-            signals: List[StrategySignal] = []
+            context = StrategyContext(
+                symbol=ticker,
+                account=account,
+                params={"start_point_ts": self.start_point_ts.get(ticker)}
+            )
+            signals: List[StrategySignal] = await strategy.on_bar(context, candles)
 
-            last_buy_ts = await self._get_last_buy_ts(db, ticker)
-            last_sell_ts = await self._get_last_sell_ts(db, ticker)
+            if candles:
+                for signal in signals:
+                    signal.metadata.setdefault("bar_timestamp", candles[-1].timestamp)
 
-            buy_slice = self._filter_candles_after(candles, last_buy_ts)
-            sell_slice = self._filter_candles_after(candles, last_sell_ts)
-
-            buy_signals = await strategy.on_bar(context, buy_slice)
-            for signal in buy_signals:
-                if signal.type == SignalType.BUY:
-                    if buy_slice:
-                        signal.metadata.setdefault("bar_timestamp", buy_slice[-1].timestamp)
-                    signals.append(signal)
-
-            sell_signals = await strategy.on_bar(context, sell_slice)
-            for signal in sell_signals:
-                if signal.type == SignalType.SELL:
-                    if sell_slice:
-                        signal.metadata.setdefault("bar_timestamp", sell_slice[-1].timestamp)
-                    signals.append(signal)
-            
             if not signals:
                 return
-            
+
             logger.info(f"Generated {len(signals)} signals for {ticker}")
-            
+
             # Prioritize signals (SELL first, then BUY by confidence)
             signals = self._prioritize_signals(signals)
-            
+
             # Process each signal sequentially
             for signal in signals:
                 # Get latest account info (previous execution may have changed balance)
@@ -493,7 +482,7 @@ class TradingService:
 
                 # Calculate quantity
                 signal.qty = strategy.calculate_quantity(signal, account, position_qty)
-                
+
                 # Log Signal (commit handled by execution)
                 db.add(LogEntry(
                     level="INFO",
@@ -501,9 +490,13 @@ class TradingService:
                     message=f"{signal.type.name} Signal for {signal.symbol} (Conf: {signal.confidence}, Qty: {signal.qty:.2f})",
                     context=signal.dict()
                 ))
-                
+
                 # Execute single signal (handles commit)
-                await self.execution.process_signal(db, signal)
+                executed = await self.execution.process_signal(db, signal)
+
+                # Legacy parity: move start_point only after actual order execution
+                if executed and signal.type in (SignalType.BUY, SignalType.SELL):
+                    self.start_point_ts[ticker] = signal.metadata.get("prev_bar_timestamp") or signal.metadata.get("bar_timestamp")
 
         except Exception as e:
             logger.error(f"Error processing {ticker}: {e}")

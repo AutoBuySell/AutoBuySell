@@ -21,10 +21,10 @@ class ExecutionService:
         self.broker = broker
         self.risk = risk_manager
 
-    async def process_signal(self, db: AsyncSession, signal: StrategySignal):
-        """Process a single signal (qty already calculated)"""
+    async def process_signal(self, db: AsyncSession, signal: StrategySignal) -> bool:
+        """Process a single signal (qty already calculated). Returns True if order was submitted."""
         if signal.type == SignalType.HOLD:
-            return
+            return False
         
         # Log the Signal first
         await self._log_signal(db, signal)
@@ -33,7 +33,7 @@ class ExecutionService:
         
         if qty <= 0:
             await db.commit()
-            return
+            return False
         
         side = 'buy' if signal.type == SignalType.BUY else 'sell'
         order_req = OrderRequest(
@@ -49,8 +49,9 @@ class ExecutionService:
         if price_estimate == 0.0:
             logger.warning(f"No current_price in signal metadata for {signal.symbol}, skipping")
             await db.commit()
-            return
+            return False
         
+        submitted = False
         try:
             # Get latest account info
             account = await self.broker.get_account_info()
@@ -60,6 +61,7 @@ class ExecutionService:
             
             # Submit to Broker
             result = await self.broker.submit_order(order_req)
+            submitted = True
             
             # Record Order in DB
             db_order = Order(
@@ -102,8 +104,9 @@ class ExecutionService:
             pass
         except Exception as e:
             db.add(LogEntry(level="ERROR", source="Execution", message=f"Failed to process signal: {str(e)}"))
-        
+
         await db.commit()
+        return submitted
 
     def _coerce_timestamp(self, value) -> datetime | None:
         if isinstance(value, datetime):

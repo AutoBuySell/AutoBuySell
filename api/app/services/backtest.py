@@ -124,8 +124,7 @@ class BacktestService:
             equity_curve = []
             trades = []
             signals_log = []
-            last_buy_ts = {}
-            last_sell_ts = {}
+            start_point_ts = {}  # Legacy parity: single anchor updated after executed order
             total_times = len(sorted_times)
 
             for time_idx, current_time in enumerate(sorted_times):
@@ -169,17 +168,6 @@ class BacktestService:
                         
                     current_slice = full_history[idx-lookback : idx+1]
 
-                    buy_slice = current_slice
-                    sell_slice = current_slice
-
-                    last_buy_time = last_buy_ts.get(sym)
-                    if last_buy_time:
-                        buy_slice = [c for c in buy_slice if c.timestamp > last_buy_time]
-
-                    last_sell_time = last_sell_ts.get(sym)
-                    if last_sell_time:
-                        sell_slice = [c for c in sell_slice if c.timestamp > last_sell_time]
-                    
                     # Mock Account
                     # Critical: Account info must reflect TOTAL portfolio state
                     # But 'buying_power' is shared.
@@ -196,32 +184,29 @@ class BacktestService:
                     context = StrategyContext(
                         symbol=sym,
                         account=mock_account,
-                        params=params or {}
+                        params={"start_point_ts": start_point_ts.get(sym), **(params or {})}
                     )
-                    
-                    # Generate Signals
-                    signals = []
-                    buy_signals = await strategy.on_bar(context, buy_slice)
-                    signals.extend([sig for sig in buy_signals if sig.type == SignalType.BUY])
 
-                    sell_signals = await strategy.on_bar(context, sell_slice)
-                    signals.extend([sig for sig in sell_signals if sig.type == SignalType.SELL])
+                    # Generate Signals (single pass, legacy parity)
+                    signals = await strategy.on_bar(context, current_slice)
                     for sig in signals:
+                        sig.metadata.setdefault("bar_timestamp", current_candle.timestamp)
+                        sig.metadata.setdefault("prev_bar_timestamp", current_slice[-2].timestamp)
                         signals_log.append({
                             "symbol": sym,
                             "type": sig.type.value,
                             "time": current_candle.timestamp.isoformat(),
-                            "price": current_candle.close,
+                            "price": sig.metadata.get("current_price", current_candle.open),
                             "confidence": sig.confidence
                         })
                     
                     # Execute Signals
                     for sig in signals:
-                        price = current_candle.close
-                        
+                        price = sig.metadata.get("current_price", current_candle.open)
+
                         # Current position quantity
                         current_pos_qty = positions.get(sym, 0.0)
-                        
+
                         # Use strategy's calculate_quantity method
                         qty = strategy.calculate_quantity(sig, mock_account, current_pos_qty)
 
@@ -230,7 +215,7 @@ class BacktestService:
                             if cash >= cost:
                                 cash -= cost
                                 positions[sym] = current_pos_qty + qty
-                                last_buy_ts[sym] = current_candle.timestamp
+                                start_point_ts[sym] = sig.metadata.get("prev_bar_timestamp", current_candle.timestamp)
                                 trades.append({
                                     "symbol": sym,
                                     "type": "BUY",
@@ -239,13 +224,12 @@ class BacktestService:
                                     "time": current_candle.timestamp.isoformat(),
                                     "equity": cash + sum(positions.get(s,0)*price for s in positions) # Approx
                                 })
-                            
-                        elif sig.type == SignalType.SELL and current_pos_qty > 0:
-                            # Sell All Logic for now
-                            qty_to_sell = current_pos_qty
+
+                        elif sig.type == SignalType.SELL and current_pos_qty > 0 and qty > 0:
+                            qty_to_sell = min(qty, current_pos_qty)
                             cash += price * qty_to_sell
-                            positions[sym] = 0
-                            last_sell_ts[sym] = current_candle.timestamp
+                            positions[sym] = max(0.0, current_pos_qty - qty_to_sell)
+                            start_point_ts[sym] = sig.metadata.get("prev_bar_timestamp", current_candle.timestamp)
                             trades.append({
                                 "symbol": sym,
                                 "type": "SELL",
