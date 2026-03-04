@@ -1,0 +1,7 @@
+symbol,bar_count,first_bar_utc,last_bar_utc,timeframe,source,window_start_utc,window_end_utc
+HIMS,300,2026-02-02T15:00:00Z,2026-03-04T14:30:00Z,30Min,alpaca stocks/bars feed=iex adjustment=raw,2026-02-02T14:43:14.740170+00:00,2026-03-04T14:43:14.740206+00:00
+TSLA,318,2026-02-02T15:00:00Z,2026-03-04T14:30:00Z,30Min,alpaca stocks/bars feed=iex adjustment=raw,2026-02-02T14:43:14.740170+00:00,2026-03-04T14:43:14.740206+00:00
+ZG,273,2026-02-02T15:00:00Z,2026-03-04T14:30:00Z,30Min,alpaca stocks/bars feed=iex adjustment=raw,2026-02-02T14:43:14.740170+00:00,2026-03-04T14:43:14.740206+00:00
+AMD,319,2026-02-02T15:00:00Z,2026-03-04T14:30:00Z,30Min,alpaca stocks/bars feed=iex adjustment=raw,2026-02-02T14:43:14.740170+00:00,2026-03-04T14:43:14.740206+00:00
+NVDA,339,2026-02-02T15:00:00Z,2026-03-04T14:30:00Z,30Min,alpaca stocks/bars feed=iex adjustment=raw,2026-02-02T14:43:14.740170+00:00,2026-03-04T14:43:14.740206+00:00
+NKLA,0,,,30Min,alpaca stocks/bars feed=iex adjustment=raw,2026-02-02T14:43:14.740170+00:00,2026-03-04T14:43:14.740206+00:00
