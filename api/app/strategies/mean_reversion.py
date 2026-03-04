@@ -161,24 +161,27 @@ class MeanReversionStrategy(Strategy):
             return 0.0
         
         target_value = self.params.get('target_value', 1000.0)
-        limit = self.params.get('limit', 1000.0)
-        
+
         current_position_value = current_position_qty * current_price
         value_diff = target_value - current_position_value
-        
+
         qty = 0.0
-        
+
         if signal.type == SignalType.SELL and current_position_qty > 0:
-            # SELL: pow(2, -value_diff / target_value) * confidence * (target_value / 5)
+            # Legacy parity (old/order.py):
+            # amount = pow(2, -value_diff / target_value) * confidence * (target_value / 5)
+            # qty = min(amount // current_price, current_position)
             amount = pow(2, -value_diff / target_value) * signal.confidence * (target_value / 5)
-            amount = min(amount, limit)
-            qty = min(amount / current_price, current_position_qty)  # Can't sell more than we have
-            
+            qty = min(amount // current_price, current_position_qty)  # floor division parity
+
         elif signal.type == SignalType.BUY:
-            # BUY: pow(2, value_diff / target_value) * confidence * (target_value / 5)
+            # Legacy parity (old/order.py):
+            # amount = pow(2, value_diff / target_value) * confidence * (target_value / 5)
+            # amount = min(amount, buying_power)
+            # qty = amount // current_price
             amount = pow(2, value_diff / target_value) * signal.confidence * (target_value / 5)
-            amount = min(amount, account.buying_power, limit)
-            qty = amount / current_price
-        
+            amount = min(amount, account.buying_power)
+            qty = amount // current_price  # floor division parity
+
         return float(max(0.0, qty))
 

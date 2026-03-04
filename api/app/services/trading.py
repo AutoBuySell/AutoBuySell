@@ -94,7 +94,7 @@ class TradingService:
         
         self.job_id = self.scheduler.add_job(
             self.run_cycle,
-            IntervalTrigger(minutes=1),
+            IntervalTrigger(minutes=3),
             id="trading_cycle",
             replace_existing=True
         )
