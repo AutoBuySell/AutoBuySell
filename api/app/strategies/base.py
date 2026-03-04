@@ -1,0 +1,64 @@
+from typing import Protocol, List, Dict, Any, Optional
+from datetime import datetime
+from pydantic import BaseModel
+from enum import Enum
+from app.brokers.base import AccountInfo
+
+class SignalType(Enum):
+    BUY = "BUY"
+    SELL = "SELL"
+    EXIT = "EXIT"
+    HOLD = "HOLD"
+
+class StrategySignal(BaseModel):
+    symbol: str
+    type: SignalType
+    confidence: float = 1.0 # 0.0 to 1.0
+    timestamp: datetime = datetime.now()
+    metadata: Dict[str, Any] = {}
+    strategy_name: str = ""  # Name of strategy that generated this signal
+    qty: float = 0.0  # Calculated order quantity
+
+class StrategyContext(BaseModel):
+    """
+    Context passed to the strategy execution.
+    """
+    symbol: str
+    account: AccountInfo
+    params: Dict[str, Any] = {} # Strategy specific parameters
+
+class Strategy(Protocol):
+    """
+    Interface that all trading strategies must implement.
+    """
+    
+    @property
+    def name(self) -> str:
+        ...
+
+    @property
+    def timeframe(self) -> str:
+        """The preferred timeframe for this strategy (e.g., '1d', '30Min', '1Min')"""
+        ...
+
+    async def initialize(self, params: Dict[str, Any]):
+        """Called once when strategy is loaded."""
+        ...
+
+    async def on_bar(self, context: StrategyContext, candles: List[Any]) -> List[StrategySignal]:
+        """
+        Called on every bar/data update. 
+        """
+        ...
+    
+    def calculate_quantity(
+        self, 
+        signal: StrategySignal, 
+        account: AccountInfo,
+        current_position_qty: float = 0.0
+    ) -> float:
+        """
+        Calculate order quantity for the given signal.
+        Called after signal generation to determine position size.
+        """
+        ...
