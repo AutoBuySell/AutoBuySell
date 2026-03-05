@@ -139,31 +139,11 @@ export default function AnalysisPage() {
       }
 
       try {
-          // Get strategy params to get timeframe
-          const strategyParams = await backtestApi.getStrategyParams(form.strategy);
-          const timeframe = strategyParams?.params?.timeframe || '30Min';
-          
-          // 1. Check Data Availability with strategy's timeframe
-          const missingSymbols = await dataApi.checkDataAvailability(
-              symbolsList, 
-              form.startDate || '2023-01-01', 
-              form.endDate || '2023-12-31',
-              timeframe
-          );
-
-          if (missingSymbols.length > 0) {
-              // Show modal instead of window.confirm
-              setMissingSymbolsForDownload(missingSymbols);
-              setPendingSymbolsList(symbolsList);
-              setShowDownloadModal(true);
-              return; // Exit and wait for modal confirmation
-          }
-
-          // No missing data - run backtest directly
+          // Backend now owns data readiness checks + auto-download.
           await executeBacktest(symbolsList);
       } catch (e) {
           console.error('Error:', e);
-          alert('Failed to check data availability');
+          alert('Failed to start backtest');
       }
   };
 

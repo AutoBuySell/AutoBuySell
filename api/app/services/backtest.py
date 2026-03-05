@@ -3,7 +3,6 @@ from sqlalchemy import select, and_, desc
 from datetime import datetime, date, time, timezone
 import logging
 from typing import List, Dict, Any, Optional
-import pandas as pd
 import numpy as np
 
 from app.domain.models import Candle, BacktestRun, BacktestResult, StrategyParam
@@ -11,6 +10,7 @@ from app.strategies.base import Strategy, StrategyContext, StrategySignal, Signa
 from app.strategies.registry import get_all_strategies  # Centralized registry
 from app.brokers.base import AccountInfo
 from app.api.ws import manager  # WebSocket manager
+from app.services.data import DataService
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +19,71 @@ class BacktestService:
         self.db = db
         # Use centralized strategy registry
         self.strategies = get_all_strategies()
+
+    def _timeframe_minutes(self, timeframe: str) -> int:
+        tf = timeframe.lower()
+        mapping = {
+            "1min": 1, "5min": 5, "15min": 15, "30min": 30,
+            "1hour": 60, "1day": 60 * 24,
+            "1m": 1, "5m": 5, "15m": 15, "30m": 30,
+            "1h": 60, "1d": 60 * 24,
+        }
+        return mapping.get(tf, 30)
+
+    async def _ensure_backtest_data_ready(
+        self,
+        symbols: List[str],
+        start_date: date,
+        end_date: date,
+        timeframe: str,
+        lookback: int,
+    ):
+        data_service = DataService(self.db)
+
+        # Extend required start range so strategy warm-up candles exist.
+        tf_minutes = self._timeframe_minutes(timeframe)
+        preload_days = max(1, int(np.ceil((lookback * tf_minutes) / (60 * 24))) + 2)
+        effective_start = start_date - timedelta(days=preload_days)
+
+        missing = await data_service.check_data_availability(
+            symbols=symbols,
+            start_date=effective_start,
+            end_date=end_date,
+            timeframe=timeframe,
+        )
+
+        if missing:
+            logger.info(
+                f"Backtest data missing for symbols={missing}, timeframe={timeframe}, "
+                f"range={effective_start}~{end_date}. Triggering auto-download."
+            )
+            await data_service.download_historical(
+                symbols=missing,
+                start_date=effective_start,
+                end_date=end_date,
+                timeframe=timeframe,
+            )
+
+        # Verify at least requested-period candles exist per symbol.
+        start_dt = datetime.combine(start_date, time.min).replace(tzinfo=timezone.utc)
+        end_dt = datetime.combine(end_date, time.max).replace(tzinfo=timezone.utc)
+        still_missing = []
+        for sym in symbols:
+            cnt_res = await self.db.execute(
+                select(Candle)
+                .where(Candle.symbol == sym)
+                .where(Candle.timeframe == timeframe)
+                .where(Candle.timestamp >= start_dt)
+                .where(Candle.timestamp <= end_dt)
+            )
+            if len(cnt_res.scalars().all()) == 0:
+                still_missing.append(sym)
+
+        if still_missing:
+            raise ValueError(
+                f"No candle data for symbols={still_missing}, timeframe={timeframe}, "
+                f"range={start_date}~{end_date} after auto-download"
+            )
 
     async def run_backtest(
         self, 
@@ -57,7 +122,7 @@ class BacktestService:
 
         await strategy.initialize(params)
 
-        lookback = getattr(strategy, 'params', {}).get('duration', 20) + 10
+        lookback = getattr(strategy, 'params', {}).get('duration', 20) + getattr(strategy, 'params', {}).get('candle_buffer', 10)
 
         run_record = BacktestRun(
             strategy_name=strategy_name,
@@ -74,6 +139,15 @@ class BacktestService:
         await self.db.refresh(run_record)
         
         try:
+            # Ensure required data exists (backend-driven auto-download)
+            await self._ensure_backtest_data_ready(
+                symbols=symbols,
+                start_date=start_date,
+                end_date=end_date,
+                timeframe=strategy.timeframe,
+                lookback=lookback,
+            )
+
             # 3. Load Data for ALL symbols
             # We need to fetch candles for each symbol and align them by bar timestamp.
             candle_map = {} # { timestamp: { symbol: Candle } }
