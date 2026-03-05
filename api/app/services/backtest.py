@@ -1,6 +1,6 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, desc
-from datetime import datetime, date, time, timezone
+from datetime import datetime, date, time, timezone, timedelta
 import logging
 from typing import List, Dict, Any, Optional
 import numpy as np
