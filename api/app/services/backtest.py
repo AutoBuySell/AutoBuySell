@@ -98,6 +98,10 @@ class BacktestService:
         # 1. Validate Strategy
         if strategy_name not in self.strategies:
             raise ValueError(f"Strategy {strategy_name} not found")
+
+        # Treat empty params as "use active DB params"
+        if params is not None and len(params) == 0:
+            params = None
         
         strategy_template = self.strategies[strategy_name]
         strategy = strategy_template.__class__()

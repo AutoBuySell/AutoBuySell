@@ -50,13 +50,17 @@ async def run_backtest(
     async def bg_wrapper(req_data: BacktestRequest):
         async with AsyncSessionLocal() as session:
             svc = BacktestService(session)
+            normalized_params = req_data.params
+            if normalized_params is not None and len(normalized_params) == 0:
+                normalized_params = None
+
             await svc.run_backtest(
                 strategy_name=req_data.strategy_name,
                 symbols=req_data.symbols,
                 start_date=req_data.start_date,
                 end_date=req_data.end_date,
                 initial_capital=req_data.initial_capital,
-                params=req_data.params
+                params=normalized_params
             )
             
     background_tasks.add_task(bg_wrapper, req)
