@@ -18,6 +18,7 @@ class BrokerPosition(BaseModel):
     market_value: float
     unrealized_pl: float
     unrealized_plpc: float
+    side: Optional[str] = None  # 'long' or 'short'
 
 class OrderRequest(BaseModel):
     symbol: str

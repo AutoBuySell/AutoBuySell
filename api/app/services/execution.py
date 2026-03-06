@@ -1,5 +1,6 @@
 from typing import List
 import logging
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.strategies.base import StrategySignal, SignalType
@@ -154,6 +155,6 @@ class ExecutionService:
             symbol=signal.symbol,
             signal_type=signal.type.name,
             signal_strength=signal.confidence,
-            raw_data=signal.metadata
+            raw_data=jsonable_encoder(signal.metadata)
         )
         db.add(log)

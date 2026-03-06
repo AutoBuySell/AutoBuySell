@@ -42,6 +42,16 @@ class AlpacaBroker(BrokerAdapter):
         positions = self.trading_client.get_all_positions()
         valid_positions = []
         for p in positions:
+            raw_side = getattr(p, 'side', None)
+            side = None
+            if raw_side is not None:
+                if hasattr(raw_side, 'value'):
+                    side = str(raw_side.value).lower()
+                else:
+                    side = str(raw_side).lower()
+                if side not in {"long", "short"}:
+                    side = "long" if "long" in side else ("short" if "short" in side else None)
+
             valid_positions.append(BrokerPosition(
                 symbol=p.symbol,
                 qty=float(p.qty),
@@ -49,7 +59,8 @@ class AlpacaBroker(BrokerAdapter):
                 current_price=float(p.current_price),
                 market_value=float(p.market_value),
                 unrealized_pl=float(p.unrealized_pl),
-                unrealized_plpc=float(p.unrealized_plpc)
+                unrealized_plpc=float(p.unrealized_plpc),
+                side=side
             ))
         return valid_positions
 

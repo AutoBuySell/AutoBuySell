@@ -5,6 +5,7 @@ from typing import List
 import logging
 import traceback
 import asyncio
+from fastapi.encoders import jsonable_encoder
 
 from app.core.database import AsyncSessionLocal
 from app.domain.models import Symbol, StrategyMeta, StrategyParam, LogEntry, Candle, SystemState
@@ -280,6 +281,7 @@ class TradingService:
             
         except Exception as e:
             logger.error(f"Failed to sync positions: {e}")
+            await db.rollback()
 
     async def _sync_trades_job(self):
         """Wrapper for sync_trades to be called by scheduler"""
@@ -488,7 +490,7 @@ class TradingService:
                     level="INFO",
                     source="Signal",
                     message=f"{signal.type.name} Signal for {signal.symbol} (Conf: {signal.confidence}, Qty: {signal.qty:.2f})",
-                    context=signal.dict()
+                    context=jsonable_encoder(signal)
                 ))
 
                 # Execute single signal (handles commit)
