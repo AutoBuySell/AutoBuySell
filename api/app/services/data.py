@@ -1,5 +1,5 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, time, timezone
 from typing import List, Tuple, Optional
 import logging
 import requests
@@ -175,13 +175,21 @@ class DataService:
             chunk_syms = symbols[i:i + chunk_size]
             syms_str = ",".join(chunk_syms)
             
+            # Legacy parity:
+            # - do not force feed (old data server did not hardcode feed)
+            # - use datetime boundaries (not date-only) to avoid truncating intraday tail bars
+            # - cap end to now-16min (same safety used in old)
+            start_dt = datetime.combine(start_date, time.min).replace(tzinfo=timezone.utc)
+            requested_end_dt = datetime.combine(end_date, time.max).replace(tzinfo=timezone.utc)
+            safe_end_dt = datetime.now(timezone.utc) - timedelta(minutes=16)
+            end_dt = min(requested_end_dt, safe_end_dt)
+
             params = {
                 "symbols": syms_str,
                 "timeframe": api_tf,
-                "start": start_date.isoformat(),
-                "end": end_date.isoformat(),
+                "start": start_dt.isoformat().replace('+00:00', 'Z'),
+                "end": end_dt.isoformat().replace('+00:00', 'Z'),
                 "limit": 10000,
-                "feed": "iex",
                 "adjustment": "raw"
             }
             
