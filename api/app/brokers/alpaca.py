@@ -1,6 +1,4 @@
 from typing import List, Any
-from types import SimpleNamespace
-import requests
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
@@ -109,29 +107,37 @@ class AlpacaBroker(BrokerAdapter):
 
     async def get_historicals(self, symbol: str, timeframe: str, limit: int) -> List[Any]:
         """
-        Old parity behavior:
-        - Use Alpaca Data REST bars endpoint directly (same family as old data server)
-        - Do NOT send per-request limit for final selection
-        - Fetch paginated bars in a broad window, then take tail(limit) internally
+        SDK-based implementation with deterministic internal tail-limit:
+        - fetch bars via alpaca-py over broad window
+        - normalize/sort by timestamp ascending
+        - apply tail(limit) in app logic (latest bars 기준)
         """
+        from alpaca.data.historical import StockHistoricalDataClient
+        from alpaca.data.requests import StockBarsRequest
+        from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
         from datetime import datetime, timedelta, timezone
 
+        client = StockHistoricalDataClient(
+            api_key=settings.ALPACA_API_KEY,
+            secret_key=settings.ALPACA_SECRET_KEY
+        )
+
         tf_normalized = timeframe.lower()
-        timeframe_map = {
-            "1min": "1Min",
-            "5min": "5Min",
-            "15min": "15Min",
-            "30min": "30Min",
-            "1hour": "1Hour",
-            "1day": "1Day",
-            "1m": "1Min",
-            "5m": "5Min",
-            "15m": "15Min",
-            "30m": "30Min",
-            "1h": "1Hour",
-            "1d": "1Day",
+        tf_map = {
+            "1min": TimeFrame(1, TimeFrameUnit.Minute),
+            "5min": TimeFrame(5, TimeFrameUnit.Minute),
+            "15min": TimeFrame(15, TimeFrameUnit.Minute),
+            "30min": TimeFrame(30, TimeFrameUnit.Minute),
+            "1hour": TimeFrame(1, TimeFrameUnit.Hour),
+            "1day": TimeFrame(1, TimeFrameUnit.Day),
+            "1m": TimeFrame(1, TimeFrameUnit.Minute),
+            "5m": TimeFrame(5, TimeFrameUnit.Minute),
+            "15m": TimeFrame(15, TimeFrameUnit.Minute),
+            "30m": TimeFrame(30, TimeFrameUnit.Minute),
+            "1h": TimeFrame(1, TimeFrameUnit.Hour),
+            "1d": TimeFrame(1, TimeFrameUnit.Day)
         }
-        alpaca_timeframe = timeframe_map.get(tf_normalized, "1Day")
+        alpaca_tf = tf_map.get(tf_normalized, TimeFrame(1, TimeFrameUnit.Day))
 
         now_utc = datetime.now(timezone.utc)
         end = now_utc - timedelta(minutes=16)
@@ -140,53 +146,29 @@ class AlpacaBroker(BrokerAdapter):
         else:
             start = end - timedelta(weeks=2)
 
-        url = f"https://data.alpaca.markets/v2/stocks/{symbol}/bars"
-        headers = {
-            "accept": "application/json",
-            "APCA-API-KEY-ID": settings.ALPACA_API_KEY or "",
-            "APCA-API-SECRET-KEY": settings.ALPACA_SECRET_KEY or "",
-        }
-        params = {
-            "timeframe": alpaca_timeframe,
-            "start": start.isoformat().replace("+00:00", "Z"),
-            "end": end.isoformat().replace("+00:00", "Z"),
-            "adjustment": "raw",
-            "limit": 1000,
-        }
+        # Important: request a broad set and do tail(limit) ourselves.
+        req = StockBarsRequest(
+            symbol_or_symbols=symbol,
+            timeframe=alpaca_tf,
+            start=start,
+            end=end,
+            adjustment="raw",
+            limit=max(limit * 50, 1000)
+        )
 
-        all_bars = []
-        page_token = None
+        bars_map = client.get_stock_bars(req)
+        try:
+            bars = list(bars_map[symbol])
+        except Exception:
+            bars = []
 
-        while True:
-            q = dict(params)
-            if page_token:
-                q["page_token"] = page_token
+        # Defensive normalization: ensure chronological order regardless of SDK behavior.
+        bars.sort(key=lambda b: b.timestamp)
 
-            resp = requests.get(url, headers=headers, params=q, timeout=30)
-            resp.raise_for_status()
-            payload = resp.json()
+        # Internal limit (latest bars 기준)
+        selected = bars[-limit:] if limit > 0 else bars
 
-            bars = payload.get("bars") or []
-            all_bars.extend(bars)
-
-            page_token = payload.get("next_page_token")
-            if not page_token:
-                break
-
-        selected = all_bars[-limit:] if limit > 0 else all_bars
-
-        # Keep existing consumer contract (bar.timestamp/open/high/low/close/volume attributes)
-        return [
-            SimpleNamespace(
-                timestamp=datetime.fromisoformat(b["t"].replace("Z", "+00:00")),
-                open=float(b["o"]),
-                high=float(b["h"]),
-                low=float(b["l"]),
-                close=float(b["c"]),
-                volume=float(b.get("v", 0.0)),
-            )
-            for b in selected
-        ]
+        return selected
 
     async def get_portfolio_history(self, period: str = "1M", timeframe: str = "1D") -> Any:
         # Use trading_client.get_portfolio_history with correct Request object
