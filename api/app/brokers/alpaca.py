@@ -141,21 +141,25 @@ class AlpacaBroker(BrokerAdapter):
         
         alpaca_tf = tf_map.get(tf_normalized, TimeFrame(1, TimeFrameUnit.Day))  # Default to 1Day
         
-        # Calculate start time roughly based on limit
-        # This is tricky for exact "last N bars", but we can fetch a bit more and slice.
-        # For '1d', 100 days ago.
+        # Legacy(old data server) parity:
+        # - do not force feed (old REST call had no explicit feed param)
+        # - cap end time to now-16min to avoid incomplete latest bar
+        # - fetch a broad recent range, then rely on limit for returned bars
         from datetime import datetime, timedelta, timezone
+        now_utc = datetime.now(timezone.utc)
+        end = now_utc - timedelta(minutes=16)
+
         if tf_normalized in ["1day", "1d"]:
-            start = datetime.now(timezone.utc) - timedelta(days=limit * 2) 
+            start = end - timedelta(days=max(limit * 2, 30))
         else:
-            start = datetime.now(timezone.utc) - timedelta(days=7) # fallback
-            
+            start = end - timedelta(weeks=2)
+
         req = StockBarsRequest(
             symbol_or_symbols=symbol,
             timeframe=alpaca_tf,
             start=start,
+            end=end,
             limit=limit,
-            feed="iex",
             adjustment="raw"
         )
         
