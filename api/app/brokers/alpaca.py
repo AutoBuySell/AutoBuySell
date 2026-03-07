@@ -107,14 +107,14 @@ class AlpacaBroker(BrokerAdapter):
 
     async def get_historicals(self, symbol: str, timeframe: str, limit: int) -> List[Any]:
         """
-        SDK-based implementation with deterministic internal tail-limit:
-        - fetch bars via alpaca-py over broad window
-        - normalize/sort by timestamp ascending
-        - apply tail(limit) in app logic (latest bars 기준)
+        SDK-based implementation using latest-first fetch:
+        - request bars with sort=DESC and limit=N (latest N bars)
+        - reverse to ascending order for strategy consumer compatibility
         """
         from alpaca.data.historical import StockHistoricalDataClient
         from alpaca.data.requests import StockBarsRequest
         from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
+        from alpaca.common.enums import Sort
         from datetime import datetime, timedelta, timezone
 
         client = StockHistoricalDataClient(
@@ -146,14 +146,14 @@ class AlpacaBroker(BrokerAdapter):
         else:
             start = end - timedelta(weeks=2)
 
-        # Important: request a broad set and do tail(limit) ourselves.
         req = StockBarsRequest(
             symbol_or_symbols=symbol,
             timeframe=alpaca_tf,
             start=start,
             end=end,
             adjustment="raw",
-            limit=max(limit * 50, 1000)
+            sort=Sort.DESC,
+            limit=limit,
         )
 
         bars_map = client.get_stock_bars(req)
@@ -162,13 +162,8 @@ class AlpacaBroker(BrokerAdapter):
         except Exception:
             bars = []
 
-        # Defensive normalization: ensure chronological order regardless of SDK behavior.
-        bars.sort(key=lambda b: b.timestamp)
-
-        # Internal limit (latest bars 기준)
-        selected = bars[-limit:] if limit > 0 else bars
-
-        return selected
+        # DESC(latest first) -> ASC(oldest first) for downstream strategy compatibility
+        return list(reversed(bars))
 
     async def get_portfolio_history(self, period: str = "1M", timeframe: str = "1D") -> Any:
         # Use trading_client.get_portfolio_history with correct Request object
