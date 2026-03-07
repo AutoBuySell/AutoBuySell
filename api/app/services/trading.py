@@ -32,6 +32,7 @@ class TradingService:
         self.is_running = False
         self.job_id = None
         self.start_point_ts = {}  # Legacy parity: per-symbol anchor after executed order
+        self.last_processed_bar_ts = {}  # Per-symbol guard to avoid duplicate judge on same bar
 
         # Use centralized strategy registry
         self.strategies = get_all_strategies()
@@ -456,6 +457,21 @@ class TradingService:
                     close=b.close,
                     volume=b.volume
                 ))
+
+            # Old parity: only judge when a NEW bar arrives (old check_data semantics)
+            current_bar_ts = candles[-1].timestamp
+            last_bar_ts = self.last_processed_bar_ts.get(ticker)
+            if last_bar_ts and current_bar_ts <= last_bar_ts:
+                logger.debug(
+                    "Skip %s: no new bar (current=%s, last=%s)",
+                    ticker,
+                    current_bar_ts,
+                    last_bar_ts,
+                )
+                return
+
+            # Mark this bar as processed even when no signal (prevents duplicate judge every 3 minutes)
+            self.last_processed_bar_ts[ticker] = current_bar_ts
 
             context = StrategyContext(
                 symbol=ticker,
