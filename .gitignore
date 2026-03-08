@@ -1,3 +1,20 @@
 old/
 .env
+.env.*
+!.env.example
 .vscode/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Node
+node_modules/
+.next/
+out/
+
+# Logs
+*.log
