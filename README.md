@@ -13,7 +13,9 @@ cp .env.example .env
 
 필수/주요 변수:
 - `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`
-- `ALPACA_API_KEY`, `ALPACA_SECRET_KEY`, `ALPACA_BASE_URL`
+- `BROKER_MODE` (`alpaca` 또는 `kis`)
+- Alpaca 사용 시: `ALPACA_API_KEY`, `ALPACA_SECRET_KEY`, `ALPACA_BASE_URL`
+- KIS 사용 시: `KIS_APP_KEY`, `KIS_APP_SECRET`, `KIS_ACCOUNT_CANO`, `KIS_ACCOUNT_ACNT_PRDT_CD`, `KIS_BASE_URL`, `KIS_IS_PAPER`
 
 ### 2) 실행
 
@@ -33,6 +35,12 @@ docker compose up -d --build
 ```bash
 curl http://127.0.0.1:8000/api/v1/trading/status
 ```
+
+## 브로커 모드 (Phase 1)
+
+- 현재는 **단일 브로커 선택 모드**입니다. (`BROKER_MODE=alpaca` 또는 `kis`)
+- `kis` 모드는 국내주식 기본 기능(잔고/포지션/주문) 중심의 1차 통합입니다.
+- Alpaca + KIS 동시 운용(멀티 브로커 동시 실행)은 2차 리팩터링 범위입니다.
 
 ## 개발 참고 문서
 
