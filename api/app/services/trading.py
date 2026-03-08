@@ -139,7 +139,8 @@ class TradingService:
             "is_running": self.is_running,
             "next_run": str(self.scheduler.get_job("trading_cycle").next_run_time) if self.is_running and self.scheduler.get_job("trading_cycle") else None,
             "active_strategy": self.active_strategy_name,
-            "available_strategies": list(self.strategies.keys())
+            "available_strategies": list(self.strategies.keys()),
+            "broker": self.broker.__class__.__name__,
         }
     
     async def set_active_strategy(self, strategy_name: str) -> bool:
