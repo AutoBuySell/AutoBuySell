@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     KIS_ACCOUNT_ACNT_PRDT_CD: Optional[str] = None  # 2-digit account product code
     KIS_BASE_URL: str = "https://openapi.koreainvestment.com:9443"
     KIS_IS_PAPER: bool = True
+    KIS_US_EXCHANGE: str = "NASD"   # order/account exchange code
+    KIS_US_PRICE_EXCD: str = "NAS"  # quotation exchange code
+    KIS_US_CURRENCY: str = "USD"
 
     model_config = SettingsConfigDict(env_file=".env", env_ignore_empty=True, extra="ignore")
 
