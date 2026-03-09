@@ -5,6 +5,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Any, List, Optional
 
 import httpx
+import asyncio
 
 from app.brokers.base import (
     BrokerAdapter,
@@ -222,8 +223,29 @@ class KISBroker(BrokerAdapter):
         headers = await self._headers(tr_id)
 
         async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.post(url, headers=headers, json=payload)
-            data = resp.json() if resp.text else {}
+            async def post_with_retry(post_url: str, post_headers: dict, post_payload: dict, attempts: int = 3):
+                last_resp = None
+                last_data = {}
+                for i in range(attempts):
+                    resp = await client.post(post_url, headers=post_headers, json=post_payload)
+                    data = resp.json() if resp.text else {}
+                    last_resp = resp
+                    last_data = data
+
+                    # KIS throttling: EGW00201 / "초당 거래건수를 초과"
+                    throttled = (
+                        (isinstance(data, dict) and str(data.get("message", "")) == "EGW00201")
+                        or (isinstance(data, dict) and "초당 거래건수를 초과" in str(data.get("msg1", "")))
+                    )
+                    if throttled and i < attempts - 1:
+                        await asyncio.sleep(1.2 * (i + 1))
+                        continue
+
+                    return resp, data
+
+                return last_resp, last_data
+
+            resp, data = await post_with_retry(url, headers, payload)
 
             # Fallback: try US daytime-order endpoint when generic order endpoint fails
             if resp.status_code >= 400:
@@ -242,8 +264,7 @@ class KISBroker(BrokerAdapter):
                     "ORD_SVR_DVSN_CD": "0",
                     "ORD_DVSN": "00",
                 }
-                resp2 = await client.post(daytime_url, headers=daytime_headers, json=daytime_payload)
-                data2 = resp2.json() if resp2.text else {}
+                resp2, data2 = await post_with_retry(daytime_url, daytime_headers, daytime_payload)
                 if resp2.status_code >= 400:
                     raise RuntimeError(
                         f"KIS order failed. order_status={resp.status_code}, order_body={data}, "
