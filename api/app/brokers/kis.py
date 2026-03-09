@@ -223,11 +223,41 @@ class KISBroker(BrokerAdapter):
 
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(url, headers=headers, json=payload)
-            resp.raise_for_status()
-            data = resp.json()
+            data = resp.json() if resp.text else {}
 
-        output = data.get("output", {})
+            # Fallback: try US daytime-order endpoint when generic order endpoint fails
+            if resp.status_code >= 400:
+                daytime_url = f"{self.base_url}/uapi/overseas-stock/v1/trading/daytime-order"
+                daytime_tr = "TTTS6036U" if is_buy else "TTTS6037U"
+                daytime_headers = await self._headers(daytime_tr)
+                daytime_payload = {
+                    "CANO": self.cano,
+                    "ACNT_PRDT_CD": self.acnt_prdt_cd,
+                    "OVRS_EXCG_CD": self.us_exchange,
+                    "PDNO": order.symbol,
+                    "ORD_QTY": str(int(order.qty)),
+                    "OVRS_ORD_UNPR": f"{price:.4f}",
+                    "CTAC_TLNO": "",
+                    "MGCO_APTM_ODNO": "",
+                    "ORD_SVR_DVSN_CD": "0",
+                    "ORD_DVSN": "00",
+                }
+                resp2 = await client.post(daytime_url, headers=daytime_headers, json=daytime_payload)
+                data2 = resp2.json() if resp2.text else {}
+                if resp2.status_code >= 400:
+                    raise RuntimeError(
+                        f"KIS order failed. order_status={resp.status_code}, order_body={data}, "
+                        f"daytime_status={resp2.status_code}, daytime_body={data2}"
+                    )
+                data = data2
+
+        output = data.get("output", {}) if isinstance(data, dict) else {}
         ord_no = str(output.get("ODNO", ""))
+        rt_cd = str(data.get("rt_cd", "")) if isinstance(data, dict) else ""
+        msg1 = str(data.get("msg1", "")) if isinstance(data, dict) else ""
+
+        if rt_cd and rt_cd != "0":
+            raise RuntimeError(f"KIS order rejected: rt_cd={rt_cd}, msg1={msg1}, body={data}")
 
         return OrderResult(
             client_order_id=ord_no or f"kis-{datetime.now().timestamp()}",
