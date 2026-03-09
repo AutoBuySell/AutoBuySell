@@ -427,8 +427,56 @@ class KISBroker(BrokerAdapter):
         return bars
 
     async def get_portfolio_history(self, period: str = "1M", timeframe: str = "1D") -> PortfolioHistory:
-        # Not provided in a single normalized endpoint by KIS; phase 1 returns empty.
-        return PortfolioHistory(timestamp=[], equity=[], profit_loss=[], profit_loss_pct=[], timeframe=timeframe)
+        """
+        KIS does not expose Alpaca-style equity curve in one normalized endpoint.
+        Phase-1 compatibility: return a synthetic flat curve based on current portfolio value
+        so UI/API contracts remain compatible.
+        """
+        account = await self.get_account_info()
+
+        tf = timeframe.upper()
+        period_key = period.upper()
+
+        # point counts by period (reasonable defaults)
+        period_points = {
+            "1D": 24,
+            "5D": 40,
+            "1W": 40,
+            "1M": 30,
+            "3M": 60,
+            "6M": 120,
+            "1A": 180,
+            "1Y": 180,
+        }
+        points = period_points.get(period_key, 30)
+
+        # step seconds by timeframe
+        step_map = {
+            "1MIN": 60,
+            "5MIN": 300,
+            "15MIN": 900,
+            "30MIN": 1800,
+            "1H": 3600,
+            "1D": 86400,
+        }
+        step = step_map.get(tf, 86400)
+
+        now = int(datetime.now(timezone.utc).timestamp())
+        start = now - step * (points - 1)
+        ts = [start + i * step for i in range(points)]
+
+        equity_value = float(account.portfolio_value or 0.0)
+        equity = [equity_value for _ in range(points)]
+        pnl = [0.0 for _ in range(points)]
+        pnl_pct = [0.0 for _ in range(points)]
+
+        return PortfolioHistory(
+            timestamp=ts,
+            equity=equity,
+            profit_loss=pnl,
+            profit_loss_pct=pnl_pct,
+            timeframe=timeframe,
+        )
 
     async def get_trade_fills(self, limit: int = 100) -> List[TradeFill]:
         url = f"{self.base_url}/uapi/overseas-stock/v1/trading/inquire-ccnl"
