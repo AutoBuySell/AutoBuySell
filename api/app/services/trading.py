@@ -164,14 +164,17 @@ class TradingService:
                     logger.info("Market is closed. Skipping cycle.")
                     return
 
-                # 1. Active Symbols
+                # 1. Account Info & Positions Sync
+                account = await self.broker.get_account_info()
+                sync_ok = await self.sync_positions(db)
+                if not sync_ok:
+                    logger.warning("Skipping cycle due to position sync failure")
+                    return
+
+                # 2. Active Symbols (query AFTER possible rollback in sync step)
                 symbols = (await db.execute(select(Symbol).where(Symbol.is_active == True))).scalars().all()
                 if not symbols:
                     return
-
-                # 2. Account Info & Positions Sync
-                account = await self.broker.get_account_info()
-                await self.sync_positions(db)
                 
                 # 3. Strategy Config (use active strategy)
                 strategy_name = self.active_strategy_name
@@ -219,7 +222,7 @@ class TradingService:
                 ))
                 await db.commit()
 
-    async def sync_positions(self, db: AsyncSession):
+    async def sync_positions(self, db: AsyncSession) -> bool:
         """Sync local Position table with Broker positions"""
         try:
             broker_positions = await self.broker.get_positions()
@@ -280,10 +283,12 @@ class TradingService:
                     await db.delete(p)
             
             await db.commit()
+            return True
             
         except Exception as e:
             logger.error(f"Failed to sync positions: {e}")
             await db.rollback()
+            return False
 
     async def _sync_trades_job(self):
         """Wrapper for sync_trades to be called by scheduler"""
