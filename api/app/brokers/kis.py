@@ -7,6 +7,7 @@ from typing import Any, List, Optional
 import httpx
 import asyncio
 from zoneinfo import ZoneInfo
+from datetime import time as dtime
 
 from app.brokers.base import (
     BrokerAdapter,
@@ -46,13 +47,14 @@ class KISBroker(BrokerAdapter):
                 "KIS_ACCOUNT_CANO, KIS_ACCOUNT_ACNT_PRDT_CD"
             )
 
-        # US market defaults (can override via env)
-        self.us_exchange = settings.KIS_US_EXCHANGE  # NASD/NYSE/AMEX
-        self.us_price_excd = settings.KIS_US_PRICE_EXCD  # NAS/NYS/AMS
+        # Fixed policy for now: NASDAQ regular session only (no daytime/pre/post)
+        self.us_exchange = "NASD"
+        self.us_price_excd = "NAS"
         self.us_currency = settings.KIS_US_CURRENCY
 
         self._access_token: Optional[str] = None
         self._token_expires_at: Optional[datetime] = None
+        self._last_market_closed_reject_at: Optional[datetime] = None
 
     async def get_name(self) -> str:
         return "KIS OpenAPI (US)"
@@ -257,35 +259,12 @@ class KISBroker(BrokerAdapter):
             if resp.status_code >= 400:
                 raise RuntimeError(f"KIS order failed: status={resp.status_code}, body={data}")
 
-            # Fallback: try US daytime-order endpoint when generic order endpoint fails
             rt_cd = str(data.get("rt_cd", "")) if isinstance(data, dict) else ""
             if rt_cd and rt_cd != "0":
-                daytime_url = f"{self.base_url}/uapi/overseas-stock/v1/trading/daytime-order"
-                daytime_tr = "TTTS6036U" if is_buy else "TTTS6037U"
-                daytime_headers = await self._headers(daytime_tr)
-                daytime_payload = {
-                    "CANO": self.cano,
-                    "ACNT_PRDT_CD": self.acnt_prdt_cd,
-                    "OVRS_EXCG_CD": self.us_exchange,
-                    "PDNO": order.symbol,
-                    "ORD_QTY": str(int(order.qty)),
-                    "OVRS_ORD_UNPR": f"{price:.4f}",
-                    "CTAC_TLNO": "",
-                    "MGCO_APTM_ODNO": "",
-                    "ORD_SVR_DVSN_CD": "0",
-                    "ORD_DVSN": "00",
-                }
-                resp2, data2 = await self._request_with_retry(client, "POST", daytime_url, headers=daytime_headers, json=daytime_payload)
-                if resp2.status_code >= 400:
-                    raise RuntimeError(
-                        f"KIS order failed. order_status={resp.status_code}, order_body={data}, "
-                        f"daytime_status={resp2.status_code}, daytime_body={data2}"
-                    )
-                data = data2
-
-            rt_cd = str(data.get("rt_cd", "")) if isinstance(data, dict) else ""
-            if rt_cd and rt_cd != "0":
-                raise RuntimeError(f"KIS order rejected: rt_cd={rt_cd}, msg1={data.get('msg1')}, body={data}")
+                msg1 = str(data.get("msg1", "")) if isinstance(data, dict) else ""
+                if "장시작전" in msg1 or "장마감" in msg1 or "장운영" in msg1:
+                    self._last_market_closed_reject_at = datetime.now(timezone.utc)
+                raise RuntimeError(f"KIS order rejected: rt_cd={rt_cd}, msg1={msg1}, body={data}")
 
 
         output = data.get("output", {}) if isinstance(data, dict) else {}
@@ -294,6 +273,8 @@ class KISBroker(BrokerAdapter):
         msg1 = str(data.get("msg1", "")) if isinstance(data, dict) else ""
 
         if rt_cd and rt_cd != "0":
+            if "장시작전" in msg1 or "장마감" in msg1 or "장운영" in msg1:
+                self._last_market_closed_reject_at = datetime.now(timezone.utc)
             raise RuntimeError(f"KIS order rejected: rt_cd={rt_cd}, msg1={msg1}, body={data}")
 
         return OrderResult(
@@ -325,7 +306,27 @@ class KISBroker(BrokerAdapter):
         return str((data or {}).get("rt_cd", "1")) == "0"
 
     async def get_market_status(self) -> bool:
-        # For US flow, avoid local time hard-blocking. Let broker/rejections decide final executability.
+        # 1) Time rule + DST (America/New_York regular session only)
+        now_et = datetime.now(timezone.utc).astimezone(ZoneInfo("America/New_York"))
+        if now_et.weekday() >= 5:
+            return False
+        regular_open = dtime(9, 30)
+        regular_close = dtime(16, 0)
+        if not (regular_open <= now_et.time() <= regular_close):
+            return False
+
+        # 2) Indirect check: quote endpoint should respond during tradable window
+        try:
+            _ = await self._fetch_us_price("AAPL")
+        except Exception:
+            return False
+
+        # 3) Order response code memory check (recent market-closed reject)
+        if self._last_market_closed_reject_at:
+            age = datetime.now(timezone.utc) - self._last_market_closed_reject_at
+            if age.total_seconds() < 180:
+                return False
+
         return True
 
     async def get_historicals(self, symbol: str, timeframe: str, limit: int) -> List[Any]:
