@@ -6,6 +6,7 @@ from typing import Any, List, Optional
 
 import httpx
 import asyncio
+from zoneinfo import ZoneInfo
 
 from app.brokers.base import (
     BrokerAdapter,
@@ -90,6 +91,34 @@ class KISBroker(BrokerAdapter):
             "tr_id": tr_id,
             "content-type": "application/json; charset=utf-8",
         }
+
+    async def _request_with_retry(
+        self,
+        client: httpx.AsyncClient,
+        method: str,
+        url: str,
+        headers: dict,
+        params: Optional[dict] = None,
+        json: Optional[dict] = None,
+        attempts: int = 3,
+    ) -> tuple[httpx.Response, dict]:
+        last_resp = None
+        last_data = {}
+        for i in range(attempts):
+            resp = await client.request(method, url, headers=headers, params=params, json=json)
+            data = resp.json() if resp.text else {}
+            last_resp, last_data = resp, data
+
+            throttled = (
+                (isinstance(data, dict) and str(data.get("message", "")) in {"EGW00201", "EGW00133"})
+                or (isinstance(data, dict) and "초당 거래건수를 초과" in str(data.get("msg1", "")))
+            )
+            if throttled and i < attempts - 1:
+                await asyncio.sleep(1.2 * (i + 1))
+                continue
+            return resp, data
+
+        return last_resp, last_data
 
     async def _fetch_us_price(self, symbol: str) -> float:
         url = f"{self.base_url}/uapi/overseas-price/v1/quotations/price"
@@ -223,32 +252,14 @@ class KISBroker(BrokerAdapter):
         headers = await self._headers(tr_id)
 
         async with httpx.AsyncClient(timeout=15.0) as client:
-            async def post_with_retry(post_url: str, post_headers: dict, post_payload: dict, attempts: int = 3):
-                last_resp = None
-                last_data = {}
-                for i in range(attempts):
-                    resp = await client.post(post_url, headers=post_headers, json=post_payload)
-                    data = resp.json() if resp.text else {}
-                    last_resp = resp
-                    last_data = data
+            resp, data = await self._request_with_retry(client, "POST", url, headers=headers, json=payload)
 
-                    # KIS throttling: EGW00201 / "초당 거래건수를 초과"
-                    throttled = (
-                        (isinstance(data, dict) and str(data.get("message", "")) == "EGW00201")
-                        or (isinstance(data, dict) and "초당 거래건수를 초과" in str(data.get("msg1", "")))
-                    )
-                    if throttled and i < attempts - 1:
-                        await asyncio.sleep(1.2 * (i + 1))
-                        continue
-
-                    return resp, data
-
-                return last_resp, last_data
-
-            resp, data = await post_with_retry(url, headers, payload)
+            if resp.status_code >= 400:
+                raise RuntimeError(f"KIS order failed: status={resp.status_code}, body={data}")
 
             # Fallback: try US daytime-order endpoint when generic order endpoint fails
-            if resp.status_code >= 400:
+            rt_cd = str(data.get("rt_cd", "")) if isinstance(data, dict) else ""
+            if rt_cd and rt_cd != "0":
                 daytime_url = f"{self.base_url}/uapi/overseas-stock/v1/trading/daytime-order"
                 daytime_tr = "TTTS6036U" if is_buy else "TTTS6037U"
                 daytime_headers = await self._headers(daytime_tr)
@@ -264,13 +275,18 @@ class KISBroker(BrokerAdapter):
                     "ORD_SVR_DVSN_CD": "0",
                     "ORD_DVSN": "00",
                 }
-                resp2, data2 = await post_with_retry(daytime_url, daytime_headers, daytime_payload)
+                resp2, data2 = await self._request_with_retry(client, "POST", daytime_url, headers=daytime_headers, json=daytime_payload)
                 if resp2.status_code >= 400:
                     raise RuntimeError(
                         f"KIS order failed. order_status={resp.status_code}, order_body={data}, "
                         f"daytime_status={resp2.status_code}, daytime_body={data2}"
                     )
                 data = data2
+
+            rt_cd = str(data.get("rt_cd", "")) if isinstance(data, dict) else ""
+            if rt_cd and rt_cd != "0":
+                raise RuntimeError(f"KIS order rejected: rt_cd={rt_cd}, msg1={data.get('msg1')}, body={data}")
+
 
         output = data.get("output", {}) if isinstance(data, dict) else {}
         ord_no = str(output.get("ODNO", ""))
@@ -289,55 +305,125 @@ class KISBroker(BrokerAdapter):
         )
 
     async def cancel_order(self, order_id: str) -> bool:
-        # Not implemented in phase 1
-        return False
+        url = f"{self.base_url}/uapi/overseas-stock/v1/trading/order-rvsecncl"
+        tr_id = "VTTT1004U" if settings.KIS_IS_PAPER else "TTTT1004U"
+        headers = await self._headers(tr_id)
+        payload = {
+            "CANO": self.cano,
+            "ACNT_PRDT_CD": self.acnt_prdt_cd,
+            "OVRS_EXCG_CD": self.us_exchange,
+            "ORGN_ODNO": order_id,
+            "RVSE_CNCL_DVSN_CD": "02",  # cancel
+            "ORD_QTY": "0",
+            "OVRS_ORD_UNPR": "0",
+            "ORD_SVR_DVSN_CD": "0",
+        }
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp, data = await self._request_with_retry(client, "POST", url, headers=headers, json=payload)
+        if resp.status_code >= 400:
+            return False
+        return str((data or {}).get("rt_cd", "1")) == "0"
 
     async def get_market_status(self) -> bool:
         # For US flow, avoid local time hard-blocking. Let broker/rejections decide final executability.
         return True
 
     async def get_historicals(self, symbol: str, timeframe: str, limit: int) -> List[Any]:
-        # US daily price endpoint. (KIS daily API)
         tf = timeframe.lower()
-        if tf not in {"1d", "1day"}:
+
+        # Daily candles
+        if tf in {"1d", "1day"}:
+            url = f"{self.base_url}/uapi/overseas-price/v1/quotations/dailyprice"
+            headers = await self._headers("HHDFS76240000")
+            today = datetime.now().strftime("%Y%m%d")
+            params = {
+                "AUTH": "",
+                "EXCD": self.us_price_excd,
+                "SYMB": symbol,
+                "GUBN": "0",
+                "BYMD": today,
+                "MODP": "1",
+            }
+
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                resp, data = await self._request_with_retry(client, "GET", url, headers=headers, params=params)
+                if resp.status_code >= 400:
+                    return []
+
+            rows = data.get("output2", [])
+            bars: List[SimpleBar] = []
+            for row in rows[:limit]:
+                dt = row.get("xymd")
+                if not dt:
+                    continue
+                ts = datetime.strptime(dt, "%Y%m%d").replace(tzinfo=timezone.utc)
+                bars.append(
+                    SimpleBar(
+                        timestamp=ts,
+                        open=float(row.get("open", 0) or 0),
+                        high=float(row.get("high", 0) or 0),
+                        low=float(row.get("low", 0) or 0),
+                        close=float(row.get("clos", 0) or 0),
+                        volume=float(row.get("tvol", 0) or 0),
+                    )
+                )
+            bars.reverse()
+            return bars
+
+        # Intraday minute candles (supports 1m/5m/15m/30m/1h)
+        minute_map = {
+            "1min": "1", "1m": "1",
+            "5min": "5", "5m": "5",
+            "15min": "15", "15m": "15",
+            "30min": "30", "30m": "30",
+            "1hour": "60", "1h": "60",
+        }
+        nmin = minute_map.get(tf)
+        if not nmin:
             return []
 
-        url = f"{self.base_url}/uapi/overseas-price/v1/quotations/dailyprice"
-        headers = await self._headers("HHDFS76240000")
-        today = datetime.now().strftime("%Y%m%d")
+        url = f"{self.base_url}/uapi/overseas-price/v1/quotations/inquire-time-itemchartprice"
+        headers = await self._headers("HHDFS76950200")
         params = {
             "AUTH": "",
             "EXCD": self.us_price_excd,
             "SYMB": symbol,
-            "GUBN": "0",  # 일봉
-            "BYMD": today,
-            "MODP": "1",
+            "NMIN": nmin,
+            "PINC": "1",
+            "NEXT": "",
+            "NREC": str(min(max(limit, 1), 120)),
+            "FILL": "",
+            "KEYB": "",
         }
 
         async with httpx.AsyncClient(timeout=20.0) as client:
-            resp = await client.get(url, params=params, headers=headers)
-            resp.raise_for_status()
-            data = resp.json()
+            resp, data = await self._request_with_retry(client, "GET", url, headers=headers, params=params)
+            if resp.status_code >= 400:
+                return []
 
         rows = data.get("output2", [])
         bars: List[SimpleBar] = []
+        kst = ZoneInfo("Asia/Seoul")
         for row in rows[:limit]:
             dt = row.get("xymd")
-            if not dt:
+            hm = row.get("xhms")
+            if not dt or not hm:
                 continue
-            ts = datetime.strptime(dt, "%Y%m%d").replace(tzinfo=timezone.utc)
+            # xhms ex) 100000 (exchange local). samples are aligned to KST view for US market.
+            ts_local = datetime.strptime(f"{dt}{hm}", "%Y%m%d%H%M%S").replace(tzinfo=kst)
+            ts = ts_local.astimezone(timezone.utc)
             bars.append(
                 SimpleBar(
                     timestamp=ts,
                     open=float(row.get("open", 0) or 0),
                     high=float(row.get("high", 0) or 0),
                     low=float(row.get("low", 0) or 0),
-                    close=float(row.get("clos", 0) or 0),
-                    volume=float(row.get("tvol", 0) or 0),
+                    close=float(row.get("last", 0) or 0),
+                    volume=float(row.get("evol", 0) or 0),
                 )
             )
 
-        bars.reverse()  # oldest -> newest
+        bars.reverse()
         return bars
 
     async def get_portfolio_history(self, period: str = "1M", timeframe: str = "1D") -> PortfolioHistory:
@@ -345,5 +431,65 @@ class KISBroker(BrokerAdapter):
         return PortfolioHistory(timestamp=[], equity=[], profit_loss=[], profit_loss_pct=[], timeframe=timeframe)
 
     async def get_trade_fills(self, limit: int = 100) -> List[TradeFill]:
-        # Phase 1: trade fill sync not implemented yet for KIS
-        return []
+        url = f"{self.base_url}/uapi/overseas-stock/v1/trading/inquire-ccnl"
+        tr_id = "VTTS3035R" if settings.KIS_IS_PAPER else "TTTS3035R"
+        headers = await self._headers(tr_id)
+
+        today = datetime.now().strftime("%Y%m%d")
+        params = {
+            "CANO": self.cano,
+            "ACNT_PRDT_CD": self.acnt_prdt_cd,
+            "PDNO": "",
+            "ORD_STRT_DT": today,
+            "ORD_END_DT": today,
+            "SLL_BUY_DVSN": "00",
+            "CCLD_NCCS_DVSN": "00",  # demo only supports 00
+            "OVRS_EXCG_CD": "",
+            "SORT_SQN": "DS",
+            "ORD_DT": "",
+            "ORD_GNO_BRNO": "",
+            "ODNO": "",
+            "CTX_AREA_NK200": "",
+            "CTX_AREA_FK200": "",
+        }
+
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp, data = await self._request_with_retry(client, "GET", url, headers=headers, params=params)
+            if resp.status_code >= 400:
+                return []
+
+        rows = data.get("output") or []
+        fills: List[TradeFill] = []
+        for row in rows[:limit]:
+            ccld_qty = float(row.get("ft_ccld_qty", 0) or 0)
+            if ccld_qty <= 0:
+                continue
+            ord_no = str(row.get("odno", "") or "")
+            ccld_no = str(row.get("ovrs_ccld_no", "") or "")
+            sym = str(row.get("ovrs_pdno", "") or "")
+            side_raw = str(row.get("sll_buy_dvsn_cd", "") or "")
+            side = "buy" if side_raw in {"02", "buy", "BUY"} else "sell"
+            price = float(row.get("ft_ccld_unpr3", 0) or row.get("ft_ord_unpr3", 0) or 0)
+
+            # best-effort timestamp parse
+            ord_dt = str(row.get("ord_dt", "") or today)
+            ord_tm = str(row.get("ord_tmd", "") or "000000").zfill(6)
+            try:
+                executed_at = datetime.strptime(f"{ord_dt}{ord_tm}", "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
+            except Exception:
+                executed_at = datetime.now(timezone.utc)
+
+            fills.append(
+                TradeFill(
+                    execution_id=ccld_no or f"{ord_no}-{sym}-{ord_dt}{ord_tm}",
+                    order_id=ord_no or None,
+                    symbol=sym,
+                    side=side,
+                    qty=ccld_qty,
+                    price=price,
+                    commission=0.0,
+                    executed_at=executed_at,
+                )
+            )
+
+        return fills
