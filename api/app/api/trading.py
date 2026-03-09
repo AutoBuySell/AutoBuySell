@@ -70,15 +70,32 @@ async def set_active_strategy(req: StrategyRequest, request: Request):
 # Existing endpoints ... (Account, Positions, Manual Order)
 from app.brokers.base import AccountInfo, BrokerPosition, OrderResult, OrderRequest as BrokerOrderReq
 
+def _map_broker_error_to_http(exc: Exception) -> HTTPException:
+    msg = str(exc)
+    if "장시작전" in msg or "장마감" in msg:
+        return HTTPException(status_code=400, detail=f"Market closed: {msg}")
+    if "EGW00201" in msg or "초당 거래건수" in msg:
+        return HTTPException(status_code=429, detail=f"Broker rate limit: {msg}")
+    if "EGW00133" in msg or "토큰" in msg:
+        return HTTPException(status_code=503, detail=f"Broker auth throttled: {msg}")
+    return HTTPException(status_code=502, detail=f"Broker error: {msg}")
+
+
 @router.get("/account", response_model=AccountInfo)
 async def get_account(request: Request):
     service: TradingService = request.app.state.trading_service
-    return await service.broker.get_account_info()
+    try:
+        return await service.broker.get_account_info()
+    except Exception as e:
+        raise _map_broker_error_to_http(e)
 
 @router.get("/positions", response_model=List[BrokerPosition])
 async def get_positions(request: Request):
     service: TradingService = request.app.state.trading_service
-    return await service.broker.get_positions()
+    try:
+        return await service.broker.get_positions()
+    except Exception as e:
+        raise _map_broker_error_to_http(e)
 
 @router.post("/orders", response_model=OrderResult)
 async def manual_order(order: OrderRequest, request: Request):
@@ -92,7 +109,10 @@ async def manual_order(order: OrderRequest, request: Request):
         limit_price=order.limit_price
     )
     
-    return await service.broker.submit_order(req)
+    try:
+        return await service.broker.submit_order(req)
+    except Exception as e:
+        raise _map_broker_error_to_http(e)
 
 from app.brokers.base import PortfolioHistory
 
@@ -106,4 +126,7 @@ async def get_portfolio_history(
     # Fix: Request was not injected properly in signature if simply 'request: Request' without dependency or default? 
     # Actually FastAPI handles it by type hint.
     service: TradingService = request.app.state.trading_service
-    return await service.broker.get_portfolio_history(period=period, timeframe=timeframe)
+    try:
+        return await service.broker.get_portfolio_history(period=period, timeframe=timeframe)
+    except Exception as e:
+        raise _map_broker_error_to_http(e)

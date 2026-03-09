@@ -515,15 +515,24 @@ class KISBroker(BrokerAdapter):
             ord_no = str(row.get("odno", "") or "")
             ccld_no = str(row.get("ovrs_ccld_no", "") or "")
             sym = str(row.get("ovrs_pdno", "") or "")
-            side_raw = str(row.get("sll_buy_dvsn_cd", "") or "")
-            side = "buy" if side_raw in {"02", "buy", "BUY"} else "sell"
+
+            side_code = str(row.get("sll_buy_dvsn_cd", "") or "").strip()
+            side_name = str(row.get("sll_buy_dvsn_name", "") or "").lower()
+            if side_code == "02" or "매수" in side_name or side_name == "buy":
+                side = "buy"
+            elif side_code == "01" or "매도" in side_name or side_name == "sell":
+                side = "sell"
+            else:
+                side = "buy"
+
             price = float(row.get("ft_ccld_unpr3", 0) or row.get("ft_ord_unpr3", 0) or 0)
 
-            # best-effort timestamp parse
+            # timestamp parse: KIS date/time fields are usually in Korea local time
             ord_dt = str(row.get("ord_dt", "") or today)
             ord_tm = str(row.get("ord_tmd", "") or "000000").zfill(6)
             try:
-                executed_at = datetime.strptime(f"{ord_dt}{ord_tm}", "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
+                executed_local = datetime.strptime(f"{ord_dt}{ord_tm}", "%Y%m%d%H%M%S").replace(tzinfo=ZoneInfo("Asia/Seoul"))
+                executed_at = executed_local.astimezone(timezone.utc)
             except Exception:
                 executed_at = datetime.now(timezone.utc)
 
