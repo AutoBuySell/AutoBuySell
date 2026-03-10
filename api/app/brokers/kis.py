@@ -115,7 +115,9 @@ class KISBroker(BrokerAdapter):
                 (isinstance(data, dict) and str(data.get("message", "")) in {"EGW00201", "EGW00133"})
                 or (isinstance(data, dict) and "초당 거래건수를 초과" in str(data.get("msg1", "")))
             )
-            if throttled and i < attempts - 1:
+            transient_5xx = resp.status_code >= 500
+
+            if (throttled or transient_5xx) and i < attempts - 1:
                 await asyncio.sleep(1.2 * (i + 1))
                 continue
             return resp, data
@@ -151,9 +153,9 @@ class KISBroker(BrokerAdapter):
         }
 
         async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(url, params=params, headers=headers)
-            resp.raise_for_status()
-            data = resp.json()
+            resp, data = await self._request_with_retry(client, "GET", url, headers=headers, params=params, attempts=4)
+            if resp.status_code >= 400:
+                raise RuntimeError(f"KIS account query failed: status={resp.status_code}, body={data}")
 
         output2 = data.get("output2") or {}
         cash = float(output2.get("frcr_dncl_amt_2", 0) or 0)
@@ -182,9 +184,9 @@ class KISBroker(BrokerAdapter):
         }
 
         async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(url, params=params, headers=headers)
-            resp.raise_for_status()
-            data = resp.json()
+            resp, data = await self._request_with_retry(client, "GET", url, headers=headers, params=params, attempts=4)
+            if resp.status_code >= 400:
+                raise RuntimeError(f"KIS positions query failed: status={resp.status_code}, body={data}")
 
         positions: List[BrokerPosition] = []
         for row in data.get("output1", []):
