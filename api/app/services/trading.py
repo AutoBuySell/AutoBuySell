@@ -499,9 +499,8 @@ class TradingService:
             signals = self._prioritize_signals(signals)
 
             # Process each signal sequentially
+            # Use one account snapshot per cycle to reduce broker API pressure.
             for signal in signals:
-                # Get latest account info (previous execution may have changed balance)
-                account = await self.broker.get_account_info()
                 position_qty = await self._get_position_qty(db, signal.symbol)
 
                 # Calculate quantity

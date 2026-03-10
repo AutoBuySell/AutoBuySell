@@ -55,6 +55,9 @@ class KISBroker(BrokerAdapter):
         self._access_token: Optional[str] = None
         self._token_expires_at: Optional[datetime] = None
         self._last_market_closed_reject_at: Optional[datetime] = None
+        self._request_lock = asyncio.Lock()
+        self._last_request_at: Optional[datetime] = None
+        self._min_request_interval_sec = 0.35
 
     async def get_name(self) -> str:
         return "KIS OpenAPI (US)"
@@ -107,7 +110,14 @@ class KISBroker(BrokerAdapter):
         last_resp = None
         last_data = {}
         for i in range(attempts):
-            resp = await client.request(method, url, headers=headers, params=params, json=json)
+            async with self._request_lock:
+                if self._last_request_at is not None:
+                    elapsed = (datetime.now(timezone.utc) - self._last_request_at).total_seconds()
+                    if elapsed < self._min_request_interval_sec:
+                        await asyncio.sleep(self._min_request_interval_sec - elapsed)
+                resp = await client.request(method, url, headers=headers, params=params, json=json)
+                self._last_request_at = datetime.now(timezone.utc)
+
             data = resp.json() if resp.text else {}
             last_resp, last_data = resp, data
 
