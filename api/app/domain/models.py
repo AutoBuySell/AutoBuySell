@@ -117,7 +117,7 @@ class Order(TimeStampedBase):
     qty: Mapped[float] = mapped_column(Float)
     limit_price: Mapped[Optional[float]] = mapped_column(Float)
     
-    status: Mapped[str] = mapped_column(String(20)) # new, filled, cancelled, rejected
+    status: Mapped[str] = mapped_column(String(32)) # new, filled, cancelled, rejected (enum-safe length)
     filled_qty: Mapped[float] = mapped_column(Float, default=0.0)
     filled_avg_price: Mapped[Optional[float]] = mapped_column(Float)
     
