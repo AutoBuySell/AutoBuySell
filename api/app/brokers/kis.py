@@ -418,11 +418,12 @@ class KISBroker(BrokerAdapter):
         bars: List[SimpleBar] = []
         kst = ZoneInfo("Asia/Seoul")
         for row in rows[:limit]:
-            dt = row.get("xymd")
-            hm = row.get("xhms")
+            # KIS 해외분봉 returns both exchange(local) and KST fields.
+            # Use KST fields to avoid ambiguous timezone conversion.
+            dt = row.get("kymd") or row.get("xymd")
+            hm = row.get("khms") or row.get("xhms")
             if not dt or not hm:
                 continue
-            # xhms ex) 100000 (exchange local). samples are aligned to KST view for US market.
             ts_local = datetime.strptime(f"{dt}{hm}", "%Y%m%d%H%M%S").replace(tzinfo=kst)
             ts = ts_local.astimezone(timezone.utc)
             bars.append(
