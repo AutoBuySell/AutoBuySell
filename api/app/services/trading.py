@@ -1,5 +1,6 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from datetime import datetime, timedelta, timezone
 from typing import List
 import logging
@@ -8,7 +9,7 @@ import asyncio
 from fastapi.encoders import jsonable_encoder
 
 from app.core.database import AsyncSessionLocal
-from app.domain.models import Symbol, StrategyMeta, StrategyParam, LogEntry, Candle, SystemState
+from app.domain.models import Symbol, StrategyMeta, StrategyParam, LogEntry, Candle, RuntimeCandle, SystemState
 from app.strategies.base import StrategyContext, StrategySignal, SignalType
 from app.strategies.registry import get_all_strategies  # Centralized registry
 from app.services.execution import ExecutionService
@@ -328,6 +329,33 @@ class TradingService:
             ts = ts.replace(tzinfo=None)
         return [c for c in candles if c.timestamp > ts]
 
+    async def _persist_runtime_candles(self, db: AsyncSession, candles: List[Candle], broker_source: str):
+        """Persist broker-runtime candles with source tag for parity analysis."""
+        if not candles:
+            return
+        for c in candles:
+            stmt = pg_insert(RuntimeCandle).values(
+                symbol=c.symbol,
+                timeframe=c.timeframe,
+                timestamp=c.timestamp,
+                broker_source=broker_source,
+                open=float(c.open),
+                high=float(c.high),
+                low=float(c.low),
+                close=float(c.close),
+                volume=float(c.volume),
+            ).on_conflict_do_update(
+                index_elements=['symbol', 'timeframe', 'timestamp', 'broker_source'],
+                set_={
+                    'open': float(c.open),
+                    'high': float(c.high),
+                    'low': float(c.low),
+                    'close': float(c.close),
+                    'volume': float(c.volume),
+                }
+            )
+            await db.execute(stmt)
+
     async def sync_trades(self, db: AsyncSession):
         """
         Sync trade fills from broker to DB.
@@ -463,6 +491,11 @@ class TradingService:
                     close=b.close,
                     volume=b.volume
                 ))
+
+            # Persist runtime candles for cross-broker parity analysis
+            broker_source = self.broker.__class__.__name__.replace('Broker', '').lower()
+            await self._persist_runtime_candles(db, candles, broker_source)
+            await db.commit()
 
             # Old parity: only judge when a NEW bar arrives (old check_data semantics)
             current_bar_ts = candles[-1].timestamp
