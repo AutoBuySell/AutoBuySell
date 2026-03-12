@@ -47,10 +47,11 @@ class KISBroker(BrokerAdapter):
                 "KIS_ACCOUNT_CANO, KIS_ACCOUNT_ACNT_PRDT_CD"
             )
 
-        # Fixed policy for now: NASDAQ regular session only (no daytime/pre/post)
+        # Fixed policy: regular session only, with per-symbol exchange mapping (NASDAQ/NYSE)
         self.us_exchange = "NASD"
         self.us_price_excd = "NAS"
         self.us_currency = settings.KIS_US_CURRENCY
+        self._nyse_symbols = {"HIMS", "NET", "NIO", "OKLO", "TDOC"}
 
         self._access_token: Optional[str] = None
         self._token_expires_at: Optional[datetime] = None
@@ -134,12 +135,19 @@ class KISBroker(BrokerAdapter):
 
         return last_resp, last_data
 
+    def _exchange_codes_for_symbol(self, symbol: str) -> tuple[str, str]:
+        s = (symbol or "").upper()
+        if s in self._nyse_symbols:
+            return "NYSE", "NYS"
+        return "NASD", "NAS"
+
     async def _fetch_us_price(self, symbol: str) -> float:
+        _, price_excd = self._exchange_codes_for_symbol(symbol)
         url = f"{self.base_url}/uapi/overseas-price/v1/quotations/price"
         headers = await self._headers("HHDFS00000300")
         params = {
             "AUTH": "",
-            "EXCD": self.us_price_excd,
+            "EXCD": price_excd,
             "SYMB": symbol,
         }
         async with httpx.AsyncClient(timeout=15.0) as client:
@@ -250,10 +258,11 @@ class KISBroker(BrokerAdapter):
             if price <= 0:
                 raise RuntimeError(f"Failed to resolve current price for {order.symbol}")
 
+        order_excg, _ = self._exchange_codes_for_symbol(order.symbol)
         payload = {
             "CANO": self.cano,
             "ACNT_PRDT_CD": self.acnt_prdt_cd,
-            "OVRS_EXCG_CD": self.us_exchange,
+            "OVRS_EXCG_CD": order_excg,
             "PDNO": order.symbol,
             "ORD_QTY": str(int(order.qty)),
             "OVRS_ORD_UNPR": f"{price:.4f}",
@@ -343,6 +352,7 @@ class KISBroker(BrokerAdapter):
 
     async def get_historicals(self, symbol: str, timeframe: str, limit: int) -> List[Any]:
         tf = timeframe.lower()
+        _, price_excd = self._exchange_codes_for_symbol(symbol)
 
         # Daily candles
         if tf in {"1d", "1day"}:
@@ -351,7 +361,7 @@ class KISBroker(BrokerAdapter):
             today = datetime.now().strftime("%Y%m%d")
             params = {
                 "AUTH": "",
-                "EXCD": self.us_price_excd,
+                "EXCD": price_excd,
                 "SYMB": symbol,
                 "GUBN": "0",
                 "BYMD": today,
@@ -399,7 +409,7 @@ class KISBroker(BrokerAdapter):
         headers = await self._headers("HHDFS76950200")
         params = {
             "AUTH": "",
-            "EXCD": self.us_price_excd,
+            "EXCD": price_excd,
             "SYMB": symbol,
             "NMIN": nmin,
             "PINC": "1",
