@@ -212,18 +212,40 @@ class AlpacaBroker(BrokerAdapter):
             "APCA-API-SECRET-KEY": settings.ALPACA_SECRET_KEY or "",
             "accept": "application/json",
         }
-        params = {
-            "direction": "desc",
-            "page_size": str(limit),
-        }
+        page_size = min(max(int(limit), 1), 100)
 
         try:
             async with httpx.AsyncClient(timeout=20.0) as client:
-                resp = await client.get(url, headers=headers, params=params)
-                if resp.status_code >= 400:
-                    print(f"Error fetching trade fills via REST: {resp.status_code} {resp.text[:200]}")
-                    return []
-                activities = resp.json() if resp.text else []
+                activities = []
+                page_token = None
+
+                while len(activities) < limit:
+                    params = {
+                        "direction": "desc",
+                        "page_size": str(page_size),
+                    }
+                    if page_token:
+                        params["page_token"] = page_token
+
+                    resp = await client.get(url, headers=headers, params=params)
+                    if resp.status_code >= 400:
+                        print(f"Error fetching trade fills via REST: {resp.status_code} {resp.text[:200]}")
+                        break
+
+                    batch = resp.json() if resp.text else []
+                    if not batch:
+                        break
+
+                    activities.extend(batch)
+                    if len(batch) < page_size:
+                        break
+
+                    # Some providers expose next token in headers; fallback: stop if absent.
+                    page_token = resp.headers.get("x-next-page-token")
+                    if not page_token:
+                        break
+
+                activities = activities[:limit]
         except Exception as e:
             print(f"Error fetching trade fills via REST: {e}")
             return []
