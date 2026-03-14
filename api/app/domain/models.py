@@ -49,6 +49,25 @@ class Candle(Base):
     close: Mapped[float] = mapped_column(Float)
     volume: Mapped[float] = mapped_column(Float)
 
+
+class RuntimeCandle(Base):
+    """Broker-runtime candles captured during live cycles (keeps broker source)."""
+    __tablename__ = "candles_runtime"
+    __table_args__ = (
+        Index("idx_runtime_candles_symbol_tf_ts_src", "symbol", "timeframe", "timestamp", "broker_source", unique=True),
+    )
+
+    symbol: Mapped[str] = mapped_column(String(20), primary_key=True)
+    timeframe: Mapped[str] = mapped_column(String(10), primary_key=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    broker_source: Mapped[str] = mapped_column(String(20), primary_key=True)
+
+    open: Mapped[float] = mapped_column(Float)
+    high: Mapped[float] = mapped_column(Float)
+    low: Mapped[float] = mapped_column(Float)
+    close: Mapped[float] = mapped_column(Float)
+    volume: Mapped[float] = mapped_column(Float)
+
 class DataDownloadRecord(TimeStampedBase):
     """
     Tracks downloaded data ranges for each symbol/timeframe combination.
@@ -117,7 +136,7 @@ class Order(TimeStampedBase):
     qty: Mapped[float] = mapped_column(Float)
     limit_price: Mapped[Optional[float]] = mapped_column(Float)
     
-    status: Mapped[str] = mapped_column(String(20)) # new, filled, cancelled, rejected
+    status: Mapped[str] = mapped_column(String(32)) # new, filled, cancelled, rejected (enum-safe length)
     filled_qty: Mapped[float] = mapped_column(Float, default=0.0)
     filled_avg_price: Mapped[Optional[float]] = mapped_column(Float)
     

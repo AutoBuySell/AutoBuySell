@@ -1,5 +1,6 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from datetime import datetime, timedelta, timezone
 from typing import List
 import logging
@@ -8,7 +9,7 @@ import asyncio
 from fastapi.encoders import jsonable_encoder
 
 from app.core.database import AsyncSessionLocal
-from app.domain.models import Symbol, StrategyMeta, StrategyParam, LogEntry, Candle, SystemState
+from app.domain.models import Symbol, StrategyMeta, StrategyParam, LogEntry, Candle, RuntimeCandle, SystemState
 from app.strategies.base import StrategyContext, StrategySignal, SignalType
 from app.strategies.registry import get_all_strategies  # Centralized registry
 from app.services.execution import ExecutionService
@@ -139,7 +140,8 @@ class TradingService:
             "is_running": self.is_running,
             "next_run": str(self.scheduler.get_job("trading_cycle").next_run_time) if self.is_running and self.scheduler.get_job("trading_cycle") else None,
             "active_strategy": self.active_strategy_name,
-            "available_strategies": list(self.strategies.keys())
+            "available_strategies": list(self.strategies.keys()),
+            "broker": self.broker.__class__.__name__,
         }
     
     async def set_active_strategy(self, strategy_name: str) -> bool:
@@ -163,14 +165,17 @@ class TradingService:
                     logger.info("Market is closed. Skipping cycle.")
                     return
 
-                # 1. Active Symbols
+                # 1. Account Info & Positions Sync
+                account = await self.broker.get_account_info()
+                sync_ok = await self.sync_positions(db)
+                if not sync_ok:
+                    logger.warning("Skipping cycle due to position sync failure")
+                    return
+
+                # 2. Active Symbols (query AFTER possible rollback in sync step)
                 symbols = (await db.execute(select(Symbol).where(Symbol.is_active == True))).scalars().all()
                 if not symbols:
                     return
-
-                # 2. Account Info & Positions Sync
-                account = await self.broker.get_account_info()
-                await self.sync_positions(db)
                 
                 # 3. Strategy Config (use active strategy)
                 strategy_name = self.active_strategy_name
@@ -218,7 +223,7 @@ class TradingService:
                 ))
                 await db.commit()
 
-    async def sync_positions(self, db: AsyncSession):
+    async def sync_positions(self, db: AsyncSession) -> bool:
         """Sync local Position table with Broker positions"""
         try:
             broker_positions = await self.broker.get_positions()
@@ -279,10 +284,12 @@ class TradingService:
                     await db.delete(p)
             
             await db.commit()
+            return True
             
         except Exception as e:
             logger.error(f"Failed to sync positions: {e}")
             await db.rollback()
+            return False
 
     async def _sync_trades_job(self):
         """Wrapper for sync_trades to be called by scheduler"""
@@ -321,6 +328,33 @@ class TradingService:
         if candles and candles[0].timestamp.tzinfo is None and ts.tzinfo is not None:
             ts = ts.replace(tzinfo=None)
         return [c for c in candles if c.timestamp > ts]
+
+    async def _persist_runtime_candles(self, db: AsyncSession, candles: List[Candle], broker_source: str):
+        """Persist broker-runtime candles with source tag for parity analysis."""
+        if not candles:
+            return
+        for c in candles:
+            stmt = pg_insert(RuntimeCandle).values(
+                symbol=c.symbol,
+                timeframe=c.timeframe,
+                timestamp=c.timestamp,
+                broker_source=broker_source,
+                open=float(c.open),
+                high=float(c.high),
+                low=float(c.low),
+                close=float(c.close),
+                volume=float(c.volume),
+            ).on_conflict_do_update(
+                index_elements=['symbol', 'timeframe', 'timestamp', 'broker_source'],
+                set_={
+                    'open': float(c.open),
+                    'high': float(c.high),
+                    'low': float(c.low),
+                    'close': float(c.close),
+                    'volume': float(c.volume),
+                }
+            )
+            await db.execute(stmt)
 
     async def sync_trades(self, db: AsyncSession):
         """
@@ -458,6 +492,11 @@ class TradingService:
                     volume=b.volume
                 ))
 
+            # Persist runtime candles for cross-broker parity analysis
+            broker_source = self.broker.__class__.__name__.replace('Broker', '').lower()
+            await self._persist_runtime_candles(db, candles, broker_source)
+            await db.commit()
+
             # Old parity: only judge when a NEW bar arrives (old check_data semantics)
             current_bar_ts = candles[-1].timestamp
             last_bar_ts = self.last_processed_bar_ts.get(ticker)
@@ -493,9 +532,8 @@ class TradingService:
             signals = self._prioritize_signals(signals)
 
             # Process each signal sequentially
+            # Use one account snapshot per cycle to reduce broker API pressure.
             for signal in signals:
-                # Get latest account info (previous execution may have changed balance)
-                account = await self.broker.get_account_info()
                 position_qty = await self._get_position_qty(db, signal.symbol)
 
                 # Calculate quantity

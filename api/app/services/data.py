@@ -5,6 +5,8 @@ import logging
 import requests
 import asyncio
 
+from app.brokers.factory import create_broker
+
 from sqlalchemy import select, and_, delete
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from app.core.config import settings
@@ -151,9 +153,72 @@ class DataService:
         timeframe: str  # Required, no default!
     ):
         """
-        Download historical data from Alpaca and save to DB.
+        Download historical data from configured broker and save to DB.
         Updates download records with interval merging.
         """
+        saved_count = 0
+
+        if settings.BROKER_MODE.lower() == "kis":
+            broker = create_broker()
+
+            # KIS phase-1 supports daily flow; keep timeframe normalization minimal.
+            tf_norm = timeframe.lower()
+            if tf_norm not in {"1d", "1day"}:
+                logger.warning(f"KIS mode currently supports only daily candles, got timeframe={timeframe}")
+                return 0
+
+            added_keys = set()
+            for sym in symbols:
+                try:
+                    bars = await broker.get_historicals(sym, timeframe, 1000)
+                except Exception as e:
+                    logger.error(f"KIS historical fetch failed for {sym}: {e}")
+                    continue
+
+                for bar in bars:
+                    ts = bar.timestamp
+                    bar_date = ts.date()
+                    if bar_date < start_date or bar_date > end_date:
+                        continue
+
+                    candle_key = (sym, timeframe, ts)
+                    if candle_key in added_keys:
+                        continue
+
+                    stmt = pg_insert(Candle).values(
+                        symbol=sym,
+                        timeframe=timeframe,
+                        timestamp=ts,
+                        open=float(bar.open),
+                        high=float(bar.high),
+                        low=float(bar.low),
+                        close=float(bar.close),
+                        volume=float(bar.volume),
+                    ).on_conflict_do_nothing(
+                        index_elements=['symbol', 'timeframe', 'timestamp']
+                    )
+                    await self.db.execute(stmt)
+                    added_keys.add(candle_key)
+                    saved_count += 1
+
+            await self.db.commit()
+
+            for sym in symbols:
+                await self._update_download_records(sym, timeframe, start_date, end_date)
+            await self.db.commit()
+
+            log = LogEntry(
+                level="INFO",
+                source="DataService",
+                message=f"Downloaded {saved_count} candles for {len(symbols)} symbols ({timeframe})",
+                context={"symbols": symbols, "timeframe": timeframe, "start": str(start_date), "end": str(end_date), "broker": "KIS"}
+            )
+            self.db.add(log)
+            await self.db.commit()
+            logger.info(f"Downloaded {saved_count} candles for {symbols} ({timeframe}) from {start_date} to {end_date}")
+            return saved_count
+
+        # Default: Alpaca flow
         api_tf = self._normalize_timeframe(timeframe)
         
         url = "https://data.alpaca.markets/v2/stocks/bars"
@@ -163,7 +228,6 @@ class DataService:
             "accept": "application/json"
         }
         
-        saved_count = 0
         loop = asyncio.get_event_loop()
         
         # Track candles added in this session to avoid duplicates

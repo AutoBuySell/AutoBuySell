@@ -6,7 +6,7 @@ from app.api import settings as settings_router
 from app.api import data as data_router
 from app.core.config import settings
 
-from app.brokers.alpaca import AlpacaBroker
+from app.brokers.factory import create_broker
 from app.services.execution import ExecutionService
 from app.services.risk import RiskManager
 from app.services.trading import TradingService
@@ -27,7 +27,7 @@ async def lifespan(app: FastAPI):
         await conn.run_sync(Base.metadata.create_all)
     
     # Initialize Services
-    broker = AlpacaBroker()
+    broker = create_broker()
     risk_manager = RiskManager()
     execution_service = ExecutionService(broker, risk_manager)
     trading_service = TradingService(broker, execution_service)

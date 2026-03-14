@@ -86,10 +86,20 @@ class AlpacaBroker(BrokerAdapter):
             )
             alpaca_order = self.trading_client.submit_order(order_data=req)
 
+        raw_status = getattr(alpaca_order, "status", None)
+        if raw_status is None:
+            normalized_status = "unknown"
+        elif hasattr(raw_status, "value"):
+            normalized_status = str(raw_status.value).lower()
+        else:
+            normalized_status = str(raw_status).lower()
+            if normalized_status.startswith("orderstatus."):
+                normalized_status = normalized_status.split(".", 1)[1]
+
         return OrderResult(
             client_order_id=str(alpaca_order.client_order_id),
             broker_order_id=str(alpaca_order.id),
-            status=str(alpaca_order.status),
+            status=normalized_status,
             symbol=alpaca_order.symbol,
             qty=float(alpaca_order.qty) if alpaca_order.qty else 0.0
         )
