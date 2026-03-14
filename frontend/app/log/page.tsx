@@ -37,22 +37,29 @@ export default function LogPage() {
     const [signals, setSignals] = useState<SignalLog[]>([]);
     const [systemLogs, setSystemLogs] = useState<SystemLog[]>([]);
     const [filter, setFilter] = useState('');
+    const [page, setPage] = useState(0);
+    const [pageSize] = useState(100);
+
+    useEffect(() => {
+        setPage(0);
+    }, [activeTab, filter]);
 
     useEffect(() => {
         loadData();
         // No auto-polling - use Refresh button
-    }, [activeTab]);
+    }, [activeTab, page]);
 
     const loadData = async () => {
         try {
+            const offset = page * pageSize;
             if (activeTab === 'trades') {
-                const data = await logApi.getTrades(100, filter || undefined);
+                const data = await logApi.getTrades(pageSize, filter || undefined, offset);
                 setTrades(data);
             } else if (activeTab === 'signals') {
-                const data = await logApi.getSignals(100, filter || undefined);
+                const data = await logApi.getSignals(pageSize, filter || undefined, offset);
                 setSignals(data);
             } else {
-                const data = await logApi.getLogs(100);
+                const data = await logApi.getLogs(pageSize, offset);
                 setSystemLogs(data);
             }
         } catch (e) {
@@ -82,7 +89,7 @@ export default function LogPage() {
             </div>
 
             {/* Filter */}
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2 items-center">
                 <input 
                     type="text"
                     placeholder="Filter by symbol..."
@@ -91,11 +98,32 @@ export default function LogPage() {
                     className="px-3 py-1.5 border rounded text-sm bg-background"
                 />
                 <button 
-                    onClick={loadData}
+                    onClick={() => { setPage(0); loadData(); }}
                     className="px-3 py-1.5 bg-secondary text-secondary-foreground rounded text-sm"
                 >
                     Refresh
                 </button>
+
+                <div className="ml-auto flex items-center gap-2 text-sm">
+                    <button
+                        onClick={() => setPage((p) => Math.max(0, p - 1))}
+                        disabled={page === 0}
+                        className="px-2 py-1 border rounded disabled:opacity-40"
+                    >
+                        Prev
+                    </button>
+                    <span>Page {page + 1}</span>
+                    <button
+                        onClick={() => {
+                            const size = activeTab === 'trades' ? trades.length : activeTab === 'signals' ? signals.length : systemLogs.length;
+                            if (size === pageSize) setPage((p) => p + 1);
+                        }}
+                        disabled={(activeTab === 'trades' ? trades.length : activeTab === 'signals' ? signals.length : systemLogs.length) < pageSize}
+                        className="px-2 py-1 border rounded disabled:opacity-40"
+                    >
+                        Next
+                    </button>
+                </div>
             </div>
 
             {/* Trade Logs */}
