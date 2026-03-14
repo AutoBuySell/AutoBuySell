@@ -34,7 +34,8 @@ async def get_unrealized_income(request: Request, db: AsyncSession = Depends(get
 
 @router.get("/equity-performance/{symbol}")
 async def get_equity_performance(
-    symbol: str, 
+    symbol: str,
+    request: Request,
     period: str = "1M", # 1W, 1M, 3M, 1Y, ALL
     type: str = "nominal", # nominal, realized
     db: AsyncSession = Depends(get_db)
@@ -62,8 +63,35 @@ async def get_equity_performance(
     candles = candles_res.scalars().all()
     
     if not candles:
-        # Fallback: if no DB candles, return empty data array (frontend expects "data" key)
-        return {"data": []}
+        # Fallback for fresh DB: pull recent broker daily bars and synthesize equity curve.
+        trading_service = request.app.state.trading_service
+        broker = trading_service.broker
+        bars = await broker.get_historicals(symbol, "1D", 90)
+        if not bars:
+            return {"data": []}
+
+        positions = await broker.get_positions()
+        pos = next((p for p in positions if p.symbol == symbol), None)
+        curr_qty = float(pos.qty) if pos else 0.0
+        avg_cost = float(pos.avg_entry_price) if pos else 0.0
+
+        history_data = []
+        for b in bars:
+            current_value = float(b.close) * curr_qty
+            unrealized_income = current_value - (avg_cost * curr_qty)
+            nominal_income = unrealized_income
+            history_data.append({
+                "date": b.timestamp.date().isoformat(),
+                "price": float(b.close),
+                "qty": curr_qty,
+                "unrealized_income": unrealized_income,
+                "realized_income": 0.0,
+                "nominal_income": nominal_income,
+                "total_bought": avg_cost * curr_qty,
+                "total_sold": 0.0,
+            })
+
+        return {"data": history_data}
         
     # 3. Fetch Trades (All time? Or just relevant? Need all time to know initial qty if start_date > first_trade)
     # Actually, calculating "Nominal Income" over a period requires knowing Qty at start_date.
