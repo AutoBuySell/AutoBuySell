@@ -1,4 +1,6 @@
 from typing import List, Any
+from datetime import datetime, timezone
+import httpx
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
@@ -198,51 +200,57 @@ class AlpacaBroker(BrokerAdapter):
 
     async def get_trade_fills(self, limit: int = 100) -> List[Any]:
         """
-        Get trade fill activities from Alpaca.
-        Note: Trading API (Retail) does NOT include commission field in response.
-        Commission will be 0.0 for retail accounts.
-        Broker API might include commission - we check for the attribute.
+        Get fill activities from Alpaca Trading REST API directly.
+        Avoids alpaca-py request class compatibility issues.
         """
-        from alpaca.trading.requests import GetAccountActivitiesRequest
-        from alpaca.trading.enums import ActivityType
         from app.brokers.base import TradeFill
-        
-        request = GetAccountActivitiesRequest(
-            activity_types=[ActivityType.FILL],
-            page_size=limit
-        )
-        
+
+        base = settings.ALPACA_BASE_URL.rstrip('/')
+        url = f"{base}/v2/account/activities/FILL"
+        headers = {
+            "APCA-API-KEY-ID": settings.ALPACA_API_KEY or "",
+            "APCA-API-SECRET-KEY": settings.ALPACA_SECRET_KEY or "",
+            "accept": "application/json",
+        }
+        params = {
+            "direction": "desc",
+            "page_size": str(limit),
+        }
+
         try:
-            activities = self.trading_client.get_account_activities(request)
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                resp = await client.get(url, headers=headers, params=params)
+                if resp.status_code >= 400:
+                    print(f"Error fetching trade fills via REST: {resp.status_code} {resp.text[:200]}")
+                    return []
+                activities = resp.json() if resp.text else []
         except Exception as e:
-            # Log error and return empty list
-            print(f"Error fetching trade fills: {e}")
+            print(f"Error fetching trade fills via REST: {e}")
             return []
-        
+
         fills = []
-        for act in activities:
-            # Commission: Trading API doesn't include this field
-            # Broker API might include it - check for attribute
-            commission = getattr(act, 'commission', None)
-            if commission is None:
-                commission = 0.0  # Retail accounts: commission-free
-            else:
-                commission = float(commission)
-            
-            # Extract order_id if available
-            order_id = None
-            if hasattr(act, 'order_id') and act.order_id:
-                order_id = str(act.order_id)
-                
-            fills.append(TradeFill(
-                execution_id=str(act.id),
-                order_id=order_id,
-                symbol=str(act.symbol),
-                side=str(act.side).lower(),
-                qty=float(act.qty),
-                price=float(act.price),
-                commission=commission,
-                executed_at=act.transaction_time
-            ))
-        
+        for act in activities or []:
+            try:
+                executed_raw = act.get("transaction_time") or act.get("date")
+                executed_at = datetime.now(timezone.utc)
+                if executed_raw:
+                    executed_at = datetime.fromisoformat(str(executed_raw).replace("Z", "+00:00"))
+
+                side = str(act.get("side", "")).lower()
+                order_id = act.get("order_id")
+                commission = float(act.get("commission") or 0.0)
+
+                fills.append(TradeFill(
+                    execution_id=str(act.get("id") or act.get("activity_id") or f"fill-{len(fills)+1}"),
+                    order_id=str(order_id) if order_id else None,
+                    symbol=str(act.get("symbol", "")),
+                    side=side,
+                    qty=float(act.get("qty") or 0),
+                    price=float(act.get("price") or 0),
+                    commission=commission,
+                    executed_at=executed_at,
+                ))
+            except Exception:
+                continue
+
         return fills
