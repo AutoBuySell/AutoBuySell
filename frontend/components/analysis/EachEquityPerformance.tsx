@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import { statisticsApi, dataApi } from '@/lib/api';
+import { statisticsApi, dataApi, tradingApi } from '@/lib/api';
 import { 
     LineChart, Line, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer 
 } from 'recharts';
@@ -28,10 +28,19 @@ export default function EachEquityPerformance() {
 
     const loadSymbols = async () => {
         try {
-            const syms = await dataApi.getSymbols(true);
-            const tickers = syms.map((s: any) => s.ticker);
+            const [watchlistSymbols, positions] = await Promise.all([
+                dataApi.getSymbols(true),
+                tradingApi.getPositions(),
+            ]);
+            const watchlistTickers = watchlistSymbols.map((s: any) => s.ticker);
+            const positionTickers = (positions || []).map((p: any) => p.symbol).filter(Boolean);
+            const tickers = Array.from(new Set([...watchlistTickers, ...positionTickers])).sort();
+
             setSymbols(tickers);
-            if (tickers.length > 0) setSelectedSymbol(tickers[0]);
+            if (tickers.length > 0) {
+                // Prefer current selection if still available
+                setSelectedSymbol(prev => tickers.includes(prev) ? prev : tickers[0]);
+            }
         } catch (e) {
             console.error(e);
         }
