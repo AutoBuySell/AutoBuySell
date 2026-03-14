@@ -80,6 +80,7 @@ export interface BacktestRun {
     strategy: string;
     symbol: string;
     status: string;
+    error_message?: string | null;
     created_at: string;
 }
 
@@ -88,6 +89,7 @@ export interface BacktestResult {
         strategy: string;
         params: Record<string, any>;
         status: string;
+        error_message?: string | null;
     };
     result: {
         total_return: number;

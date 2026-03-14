@@ -104,6 +104,7 @@ async def list_runs(db: AsyncSession = Depends(get_db)):
         "strategy": r.strategy_name,
         "symbol": r.symbol,
         "status": r.status,
+        "error_message": r.error_message,
         "created_at": r.created_at
     } for r in runs]
 
@@ -124,7 +125,8 @@ async def get_result(run_id: str, db: AsyncSession = Depends(get_db)):
         "run": {
             "strategy": run.strategy_name,
             "params": run.params,
-            "status": run.status
+            "status": run.status,
+            "error_message": run.error_message,
         },
         "result": {
             "total_return": result.total_return if result else 0,

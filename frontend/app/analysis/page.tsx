@@ -39,6 +39,8 @@ export default function AnalysisPage() {
   });
   const [loading, setLoading] = useState(false);
   const [isDownloadingData, setIsDownloadingData] = useState(false);
+  const [paramJson, setParamJson] = useState('');
+  const [backtestError, setBacktestError] = useState<string | null>(null);
   
   // -- Download Confirmation Modal State --
   const [showDownloadModal, setShowDownloadModal] = useState(false);
@@ -92,6 +94,23 @@ export default function AnalysisPage() {
       }
   }, [strategies, form.strategy]);
 
+  useEffect(() => {
+      const loadDefaultParams = async () => {
+          if (!form.strategy) return;
+          try {
+              const p = await backtestApi.getStrategyParams(form.strategy);
+              if (p?.params) {
+                  setParamJson(JSON.stringify(p.params, null, 2));
+              } else {
+                  setParamJson('{}');
+              }
+          } catch {
+              setParamJson('{}');
+          }
+      };
+      loadDefaultParams();
+  }, [form.strategy]);
+
   const loadInitialData = async () => {
     try {
         const strats = await backtestApi.getStrategies();
@@ -126,6 +145,8 @@ export default function AnalysisPage() {
   };
 
   const handleRun = async () => {
+      setBacktestError(null);
+
       // Validate BEFORE setting loading state
       const symbolsList = form.symbol.split(',').map(s => s.trim()).filter(s => s.length > 0);
 
@@ -205,17 +226,26 @@ export default function AnalysisPage() {
   const executeBacktest = async (symbolsList: string[]) => {
       setLoading(true);
       try {
+          let parsedParams: Record<string, any> = {};
+          try {
+              parsedParams = paramJson?.trim() ? JSON.parse(paramJson) : {};
+          } catch {
+              setBacktestError('Backtest params JSON 형식이 올바르지 않습니다.');
+              return;
+          }
+
           await backtestApi.run({
               strategy_name: form.strategy,
-              symbols: symbolsList, 
+              symbols: symbolsList,
               start_date: form.startDate,
               end_date: form.endDate,
               initial_capital: typeof form.initialCapital === 'number' ? form.initialCapital : (parseInt(form.initialCapital as string) || 10000),
-              params: {}
+              params: parsedParams
           });
           setTimeout(loadRuns, 500);
-      } catch (e) {
-          alert('Failed to start backtest');
+      } catch (e: any) {
+          const detail = e?.response?.data?.detail;
+          setBacktestError(detail || 'Failed to start backtest');
       } finally {
           setLoading(false);
       }
@@ -455,6 +485,25 @@ export default function AnalysisPage() {
                             step="1000"
                         />
                     </div>
+
+                    <div>
+                        <label className="block text-sm font-medium mb-1">Backtest Params (JSON)</label>
+                        <textarea
+                            className="w-full p-2 rounded border bg-background font-mono text-xs h-44"
+                            value={paramJson}
+                            onChange={e => setParamJson(e.target.value)}
+                            placeholder='{"target_value": 1000, "timeframe": "30Min"}'
+                        />
+                        <p className="text-xs text-muted-foreground mt-1">
+                            운영 파라미터와 독립적으로 백테스트 전용 파라미터를 지정할 수 있어.
+                        </p>
+                    </div>
+
+                    {backtestError && (
+                        <div className="p-2 text-sm text-red-600 bg-red-50 border border-red-200 rounded">
+                            {backtestError}
+                        </div>
+                    )}
     
                     <button 
                         className="w-full py-2 bg-primary text-primary-foreground rounded hover:opacity-90 disabled:opacity-50"
@@ -489,6 +538,7 @@ export default function AnalysisPage() {
                                     <tr>
                                         <th className="p-2">Sym</th>
                                         <th className="p-2">Status</th>
+                                        <th className="p-2">Reason</th>
                                         <th className="p-2">Action</th>
                                     </tr>
                                 </thead>
@@ -503,6 +553,9 @@ export default function AnalysisPage() {
                                                 }`}>
                                                     {run.status}
                                                 </span>
+                                            </td>
+                                            <td className="p-2 text-xs text-muted-foreground max-w-[220px] truncate" title={run.error_message || ''}>
+                                                {run.status === 'FAILED' ? (run.error_message || '-') : '-'}
                                             </td>
                                             <td className="p-2">
                                                 <button 
@@ -545,6 +598,12 @@ export default function AnalysisPage() {
                                     <div className="text-xl font-bold">{selectedRun.run.status}</div>
                                 </div>
                             </div>
+
+                            {selectedRun.run.status === 'FAILED' && selectedRun.run.error_message && (
+                                <div className="p-3 text-sm text-red-700 bg-red-50 border border-red-200 rounded">
+                                    <strong>Failure reason:</strong> {selectedRun.run.error_message}
+                                </div>
+                            )}
     
                             <div className="h-[400px] w-full border rounded p-2 flex flex-col">
                                 <div className="flex items-center gap-4 px-2 pb-2 text-sm">
