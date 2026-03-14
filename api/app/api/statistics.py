@@ -82,6 +82,29 @@ async def get_equity_performance(
         fills = [f for f in fills_all if str(f.symbol).upper() == symbol.upper()]
         fills.sort(key=lambda x: x.executed_at)
 
+        # Persist fetched fills into DB to reduce repeated broker calls on future screens.
+        existing_exec_res = await db.execute(
+            select(Trade.execution_id).where(Trade.symbol == symbol)
+        )
+        existing_exec_ids = {e for (e,) in existing_exec_res.all() if e}
+        for f in fills:
+            exec_id = str(getattr(f, 'execution_id', '') or '')
+            if exec_id and exec_id in existing_exec_ids:
+                continue
+            db.add(Trade(
+                order_id=None,
+                symbol=symbol,
+                side=str(f.side).lower(),
+                qty=float(f.qty),
+                price=float(f.price),
+                commission=float(getattr(f, 'commission', 0.0) or 0.0),
+                execution_id=exec_id or None,
+                source='external',
+            ))
+            if exec_id:
+                existing_exec_ids.add(exec_id)
+        await db.commit()
+
         positions = await broker.get_positions()
         pos = next((p for p in positions if p.symbol == symbol), None)
 
@@ -101,9 +124,6 @@ async def get_equity_performance(
                 f = fills_desc[fill_idx]
                 f_qty = float(f.qty)
                 side = str(f.side).lower()
-                # Reverse replay:
-                # - buy after bar means qty at bar was lower
-                # - sell after bar means qty at bar was higher
                 if side == 'buy':
                     qty_cursor -= f_qty
                 elif side == 'sell':
@@ -111,19 +131,49 @@ async def get_equity_performance(
                 fill_idx += 1
             qty_by_ts[bar_dt] = max(qty_cursor, 0.0)
 
+        # Build realized P/L timeline from fills (best-effort moving-average method)
+        fills_asc = sorted(fills, key=lambda x: x.executed_at)
+        fill_idx2 = 0
+        run_qty = 0.0
+        run_avg = 0.0
+        run_realized = 0.0
+        realized_by_ts = {}
+        for b in bars:
+            bar_dt = b.timestamp
+            while fill_idx2 < len(fills_asc) and fills_asc[fill_idx2].executed_at <= bar_dt:
+                f = fills_asc[fill_idx2]
+                q = float(f.qty)
+                p = float(f.price)
+                comm = float(getattr(f, 'commission', 0.0) or 0.0)
+                side = str(f.side).lower()
+                if side == 'buy':
+                    total_cost = (run_qty * run_avg) + (q * p) + comm
+                    run_qty += q
+                    if run_qty > 0:
+                        run_avg = total_cost / run_qty
+                else:
+                    qty_sold = min(q, run_qty) if run_qty > 0 else q
+                    run_realized += (p - run_avg) * qty_sold - comm
+                    run_qty = max(run_qty - q, 0.0)
+                    if run_qty == 0:
+                        run_avg = 0.0
+                fill_idx2 += 1
+            realized_by_ts[bar_dt] = run_realized
+
         history_data = []
         for b in bars:
             bar_qty = qty_by_ts.get(b.timestamp, qty_now)
             current_value = float(b.close) * bar_qty
             unrealized_income = current_value - (curr_avg_cost * bar_qty)
-            nominal_income = unrealized_income
+            realized_income = float(realized_by_ts.get(b.timestamp, 0.0))
+            nominal_income = unrealized_income + realized_income
 
             history_data.append({
                 "date": b.timestamp.date().isoformat(),
                 "price": float(b.close),
                 "qty": bar_qty,
                 "unrealized_income": unrealized_income,
-                "realized_income": 0.0,
+                "realized_income": realized_income,
                 "nominal_income": nominal_income,
                 "total_bought": curr_avg_cost * bar_qty,
                 "total_sold": 0.0,
