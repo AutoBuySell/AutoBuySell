@@ -260,6 +260,19 @@ export default function AnalysisPage() {
       }
   };
 
+  const getPaddedDomain = (values: number[], padRatio: number = 0.05): [number, number] => {
+      if (!values.length) return [0, 1];
+      const min = Math.min(...values);
+      const max = Math.max(...values);
+      const span = max - min;
+      if (span === 0) {
+          const base = Math.max(Math.abs(max), 1);
+          return [min - base * padRatio, max + base * padRatio];
+      }
+      const pad = span * padRatio;
+      return [min - pad, max + pad];
+  };
+
   // Prepare Pie Data
   const pieData = positions.map(p => ({
       name: p.symbol,
@@ -271,6 +284,7 @@ export default function AnalysisPage() {
       time: new Date(t * 1000).toLocaleDateString(),
       equity: history.equity[i]
   })) || [];
+  const liveEquityDomain = getPaddedDomain(equityData.map((d) => Number(d.equity || 0)));
 
   const equityCurveRaw = selectedRun?.result?.equity_curve || [];
   const trades = selectedRun?.result?.metrics?.trades || [];
@@ -312,6 +326,8 @@ export default function AnalysisPage() {
       })
       .filter((point) => Number.isFinite(point.timeMs))
       .sort((a, b) => a.timeMs - b.timeMs);
+  const backtestEquityDomain = getPaddedDomain(equityCurve.map((p: any) => Number(p.equity || 0)));
+  const backtestPriceDomain = getPaddedDomain(equityCurve.map((p: any) => Number(p.price || 0)).filter((v: number) => Number.isFinite(v) && v > 0));
 
   const renderEventDot = (props: any) => {
       const { cx, cy, payload } = props;
@@ -647,7 +663,7 @@ export default function AnalysisPage() {
                                             axisLine={false}
                                         />
                                         <YAxis 
-                                            domain={['auto', 'auto']}
+                                            domain={backtestEquityDomain}
                                             yAxisId="main"
                                             stroke="#2563eb"
                                             fontSize={12}
@@ -656,7 +672,7 @@ export default function AnalysisPage() {
                                             tickFormatter={(value) => `$${value}`}
                                         />
                                         <YAxis
-                                            domain={['auto', 'auto']}
+                                            domain={backtestPriceDomain}
                                             yAxisId="price"
                                             orientation="right"
                                             stroke="#f59e0b"
@@ -756,7 +772,7 @@ export default function AnalysisPage() {
                                                axisLine={false}
                                            />
                                            <YAxis 
-                                                domain={['auto', 'auto']}
+                                                domain={liveEquityDomain}
                                                 stroke="#888888"
                                                 fontSize={12}
                                                 tickLine={false}
