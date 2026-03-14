@@ -13,11 +13,13 @@ from app.domain.models import Symbol, StrategyMeta, StrategyParam, LogEntry, Can
 from app.strategies.base import StrategyContext, StrategySignal, SignalType
 from app.strategies.registry import get_all_strategies  # Centralized registry
 from app.services.execution import ExecutionService
+from app.services.data import DataService
 from app.brokers.base import BrokerAdapter, AccountInfo
 
 # Scheduler
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
+from apscheduler.triggers.cron import CronTrigger
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +115,15 @@ class TradingService:
             replace_existing=True
         )
         logger.info(f"Sync trades job added: {sync_job}")
+
+        # Daily watchlist candle sync (Mon-Fri, 19:10 America/New_York ~= close+3h)
+        daily_sync_job = self.scheduler.add_job(
+            self._daily_watchlist_candle_sync_job,
+            CronTrigger(day_of_week="mon-fri", hour=19, minute=10, timezone="America/New_York"),
+            id="daily_watchlist_candle_sync",
+            replace_existing=True,
+        )
+        logger.info(f"Daily watchlist candle sync job added: {daily_sync_job}")
         
         self.is_running = True
         
@@ -295,6 +306,32 @@ class TradingService:
         """Wrapper for sync_trades to be called by scheduler"""
         async with AsyncSessionLocal() as db:
             await self.sync_trades(db)
+
+    async def _daily_watchlist_candle_sync_job(self):
+        """Daily OHLCV sync for all watchlist symbols (active/inactive), last 7 days, 30Min."""
+        async with AsyncSessionLocal() as db:
+            try:
+                symbols = (await db.execute(select(Symbol))).scalars().all()
+                tickers = sorted(list({s.ticker for s in symbols if s.ticker}))
+                if not tickers:
+                    logger.info("Daily candle sync skipped: no symbols in watchlist")
+                    return
+
+                end_date = datetime.now(timezone.utc).date()
+                start_date = end_date - timedelta(days=7)
+
+                data_service = DataService(db)
+                saved = await data_service.download_historical(
+                    symbols=tickers,
+                    start_date=start_date,
+                    end_date=end_date,
+                    timeframe="30Min",
+                )
+                logger.info(
+                    f"Daily candle sync completed: symbols={len(tickers)}, saved={saved}, range={start_date}~{end_date}"
+                )
+            except Exception as e:
+                logger.error(f"Daily candle sync failed: {e}")
 
     async def _get_last_buy_ts(self, db: AsyncSession, symbol: str) -> datetime | None:
         key = f"last_buy_ts:{symbol}"

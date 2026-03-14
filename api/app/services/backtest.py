@@ -70,6 +70,8 @@ class BacktestService:
         end_dt = datetime.combine(end_date, time.max).replace(tzinfo=timezone.utc)
         still_missing = []
         insufficient_coverage = []
+        one_week = timedelta(days=7)
+
         for sym in symbols:
             rows_res = await self.db.execute(
                 select(Candle)
@@ -86,13 +88,40 @@ class BacktestService:
 
             first_ts = rows[0].timestamp
             last_ts = rows[-1].timestamp
-            tf_minutes = self._timeframe_minutes(timeframe)
-            max_start_gap = timedelta(minutes=tf_minutes * 2)
-            max_end_gap = timedelta(minutes=tf_minutes * 2)
 
-            if (first_ts - start_dt) > max_start_gap or (end_dt - last_ts) > max_end_gap:
+            # Boundary tolerance: start/end can be empty (e.g., weekend/holiday),
+            # but nearest available candle must be within 1 week.
+            start_gap = first_ts - start_dt
+            end_gap = end_dt - last_ts
+            if start_gap > one_week or end_gap > one_week:
                 insufficient_coverage.append({
                     "symbol": sym,
+                    "reason": "boundary_gap_over_1w",
+                    "start_gap_days": round(start_gap.total_seconds() / 86400, 2),
+                    "end_gap_days": round(end_gap.total_seconds() / 86400, 2),
+                    "first": first_ts.isoformat(),
+                    "last": last_ts.isoformat(),
+                })
+                continue
+
+            # Middle-gap check: reject if any consecutive gap exceeds 1 week.
+            prev_ts = rows[0].timestamp
+            max_mid_gap = timedelta(0)
+            max_mid_pair = (rows[0].timestamp, rows[0].timestamp)
+            for c in rows[1:]:
+                gap = c.timestamp - prev_ts
+                if gap > max_mid_gap:
+                    max_mid_gap = gap
+                    max_mid_pair = (prev_ts, c.timestamp)
+                prev_ts = c.timestamp
+
+            if max_mid_gap > one_week:
+                insufficient_coverage.append({
+                    "symbol": sym,
+                    "reason": "middle_gap_over_1w",
+                    "mid_gap_days": round(max_mid_gap.total_seconds() / 86400, 2),
+                    "gap_from": max_mid_pair[0].isoformat(),
+                    "gap_to": max_mid_pair[1].isoformat(),
                     "first": first_ts.isoformat(),
                     "last": last_ts.isoformat(),
                 })
