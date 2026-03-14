@@ -94,7 +94,7 @@ export interface BacktestResult {
     result: {
         total_return: number;
         total_trades: number;
-        equity_curve: Array<{time: string, equity: number}>;
+        equity_curve: Array<{time: string, equity: number, price?: number | null, price_symbol?: string | null}>;
         metrics: {
             trades: Array<any>;
             signals?: Array<any>;

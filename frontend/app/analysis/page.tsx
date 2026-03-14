@@ -260,6 +260,19 @@ export default function AnalysisPage() {
       }
   };
 
+  const getPaddedDomain = (values: number[], padRatio: number = 0.05): [number, number] => {
+      if (!values.length) return [0, 1];
+      const min = Math.min(...values);
+      const max = Math.max(...values);
+      const span = max - min;
+      if (span === 0) {
+          const base = Math.max(Math.abs(max), 1);
+          return [min - base * padRatio, max + base * padRatio];
+      }
+      const pad = span * padRatio;
+      return [min - pad, max + pad];
+  };
+
   // Prepare Pie Data
   const pieData = positions.map(p => ({
       name: p.symbol,
@@ -271,6 +284,7 @@ export default function AnalysisPage() {
       time: new Date(t * 1000).toLocaleDateString(),
       equity: history.equity[i]
   })) || [];
+  const liveEquityDomain = getPaddedDomain(equityData.map((d) => Number(d.equity || 0)));
 
   const equityCurveRaw = selectedRun?.result?.equity_curve || [];
   const trades = selectedRun?.result?.metrics?.trades || [];
@@ -312,6 +326,14 @@ export default function AnalysisPage() {
       })
       .filter((point) => Number.isFinite(point.timeMs))
       .sort((a, b) => a.timeMs - b.timeMs);
+  const backtestEquityDomain = getPaddedDomain(
+      equityCurve.map((p: any) => Number(p.equity || 0)).filter((v: number) => Number.isFinite(v))
+  );
+  const backtestPriceValues = equityCurve
+      .map((p: any) => Number(p.price))
+      .filter((v: number) => Number.isFinite(v) && v > 0);
+  const hasBacktestPrice = backtestPriceValues.length > 0;
+  const backtestPriceDomain = hasBacktestPrice ? getPaddedDomain(backtestPriceValues) : [0, 1];
 
   const renderEventDot = (props: any) => {
       const { cx, cy, payload } = props;
@@ -376,7 +398,12 @@ export default function AnalysisPage() {
                       ))}
                   </div>
               ) : (
-                  <div className="mt-1">Equity: ${Number(point.equity).toFixed(2)}</div>
+                  <div className="mt-1 space-y-1">
+                      <div>Equity: ${Number(point.equity).toFixed(2)}</div>
+                      {point.price != null && (
+                          <div>Price ({point.price_symbol || 'symbol'}): ${Number(point.price).toFixed(2)}</div>
+                      )}
+                  </div>
               )}
           </div>
       );
@@ -414,7 +441,7 @@ export default function AnalysisPage() {
       </div>
       
       {activeTab === 'backtest' ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="grid grid-cols-1 gap-6">
             {/* Configuration Panel */}
             <Card>
                 <CardHeader>
@@ -607,6 +634,11 @@ export default function AnalysisPage() {
     
                             <div className="h-[400px] w-full border rounded p-2 flex flex-col">
                                 <div className="flex items-center gap-4 px-2 pb-2 text-sm">
+                                    {!hasBacktestPrice && (
+                                        <span className="text-xs text-amber-600">
+                                            Price line unavailable for this run (created before price-overlay patch). Run a new backtest to display price.
+                                        </span>
+                                    )}
                                     <label className="flex items-center gap-2">
                                         <input
                                             type="checkbox"
@@ -642,14 +674,26 @@ export default function AnalysisPage() {
                                             axisLine={false}
                                         />
                                         <YAxis 
-                                            domain={['auto', 'auto']}
+                                            domain={backtestEquityDomain}
                                             yAxisId="main"
-                                            stroke="#888888"
+                                            stroke="#2563eb"
                                             fontSize={12}
                                             tickLine={false}
                                             axisLine={false}
-                                            tickFormatter={(value) => `$${value}`}
+                                            tickFormatter={(value) => `$${Number(value).toFixed(1)}`}
                                         />
+                                        {hasBacktestPrice && (
+                                            <YAxis
+                                                domain={backtestPriceDomain}
+                                                yAxisId="price"
+                                                orientation="right"
+                                                stroke="#f59e0b"
+                                                fontSize={12}
+                                                tickLine={false}
+                                                axisLine={false}
+                                                tickFormatter={(value) => `$${Number(value).toFixed(1)}`}
+                                            />
+                                        )}
                                         <Tooltip 
                                             content={renderTooltip}
                                         />
@@ -663,7 +707,23 @@ export default function AnalysisPage() {
                                             dot={false}
                                             activeDot={!(showSignals || showOrders)}
                                             isAnimationActive={false}
+                                            name="Equity"
                                         />
+                                        {hasBacktestPrice && (
+                                            <Line
+                                                type="monotone"
+                                                dataKey="price"
+                                                xAxisId="main"
+                                                yAxisId="price"
+                                                stroke="#f59e0b"
+                                                strokeWidth={2}
+                                                dot={false}
+                                                activeDot={false}
+                                                isAnimationActive={false}
+                                                connectNulls
+                                                name="Price"
+                                            />
+                                        )}
                                         <Line
                                             type="monotone"
                                             dataKey="equity"
@@ -727,12 +787,12 @@ export default function AnalysisPage() {
                                                axisLine={false}
                                            />
                                            <YAxis 
-                                                domain={['auto', 'auto']}
+                                                domain={liveEquityDomain}
                                                 stroke="#888888"
                                                 fontSize={12}
                                                 tickLine={false}
                                                 axisLine={false}
-                                                tickFormatter={(value) => `$${value}`}
+                                                tickFormatter={(value) => `$${Number(value).toFixed(1)}`}
                                            />
                                            <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
                                            <Tooltip 

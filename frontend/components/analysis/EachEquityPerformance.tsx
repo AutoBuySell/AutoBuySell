@@ -59,12 +59,31 @@ export default function EachEquityPerformance() {
         }
     };
 
+    const getPaddedDomain = (values: number[], padRatio: number = 0.05): [number, number] => {
+        if (!values.length) return [0, 1];
+        const min = Math.min(...values);
+        const max = Math.max(...values);
+        const span = max - min;
+        if (span === 0) {
+            const base = Math.max(Math.abs(max), 1);
+            return [min - base * padRatio, max + base * padRatio];
+        }
+        const pad = span * padRatio;
+        return [min - pad, max + pad];
+    };
+
     const commonTooltipStyle = {
         backgroundColor: 'rgba(255, 255, 255, 0.95)',
         border: '1px solid #ccc',
         borderRadius: '4px',
         color: '#000'
     };
+
+    const priceDomain = getPaddedDomain((data || []).map((d) => Number(d.price || 0)));
+    const qtyDomain = getPaddedDomain((data || []).map((d) => Number(d.qty || 0)));
+    const unrealizedDomain = getPaddedDomain((data || []).map((d) => Number(d.unrealized_income || 0)));
+    const nominalDomain = getPaddedDomain((data || []).map((d) => Number(d.nominal_income || 0)));
+    const realizedDomain = getPaddedDomain((data || []).map((d) => Number(d.realized_income || 0)));
 
     const NoDataMessage = () => (
         <div className="flex h-full items-center justify-center text-muted-foreground">
@@ -123,11 +142,12 @@ export default function EachEquityPerformance() {
                                         axisLine={false} 
                                     />
                                     <YAxis 
+                                        domain={priceDomain}
                                         stroke="#888888" 
                                         fontSize={12} 
                                         tickLine={false} 
                                         axisLine={false}
-                                        tickFormatter={(val) => `$${val}`}
+                                        tickFormatter={(val) => `$${Number(val).toFixed(1)}`}
                                     />
                                     <Tooltip 
                                         labelFormatter={(label) => label.split('T')[0]}
@@ -162,6 +182,7 @@ export default function EachEquityPerformance() {
                                         axisLine={false} 
                                     />
                                     <YAxis 
+                                        domain={qtyDomain}
                                         stroke="#888888" 
                                         fontSize={12} 
                                         tickLine={false} 
@@ -205,11 +226,12 @@ export default function EachEquityPerformance() {
                                         axisLine={false} 
                                     />
                                     <YAxis 
+                                        domain={unrealizedDomain}
                                         stroke="#888888" 
                                         fontSize={12} 
                                         tickLine={false} 
                                         axisLine={false}
-                                        tickFormatter={(val) => `$${val}`}
+                                        tickFormatter={(val) => `$${Number(val).toFixed(1)}`}
                                     />
                                     <Tooltip 
                                         labelFormatter={(label) => label.split('T')[0]}
@@ -245,11 +267,12 @@ export default function EachEquityPerformance() {
                                         axisLine={false} 
                                     />
                                     <YAxis 
+                                        domain={nominalDomain}
                                         stroke="#888888" 
                                         fontSize={12} 
                                         tickLine={false} 
                                         axisLine={false}
-                                        tickFormatter={(val) => `$${val}`}
+                                        tickFormatter={(val) => `$${Number(val).toFixed(1)}`}
                                     />
                                     <Tooltip 
                                         labelFormatter={(label) => label.split('T')[0]}
@@ -285,11 +308,12 @@ export default function EachEquityPerformance() {
                                         axisLine={false} 
                                     />
                                     <YAxis 
+                                        domain={realizedDomain}
                                         stroke="#888888" 
                                         fontSize={12} 
                                         tickLine={false} 
                                         axisLine={false}
-                                        tickFormatter={(val) => `$${val}`}
+                                        tickFormatter={(val) => `$${Number(val).toFixed(1)}`}
                                     />
                                     <Tooltip 
                                         labelFormatter={(label) => label.split('T')[0]}
