@@ -75,7 +75,10 @@ async def get_equity_performance(
         if not bars:
             return {"data": []}
 
-        fills_all = await broker.get_trade_fills(limit=2000)
+        try:
+            fills_all = await broker.get_trade_fills(limit=2000)
+        except Exception:
+            fills_all = []
         fills = [f for f in fills_all if str(f.symbol).upper() == symbol.upper()]
         fills.sort(key=lambda x: x.executed_at)
 
