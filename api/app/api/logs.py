@@ -54,9 +54,10 @@ async def get_logs(
     level: Optional[str] = None,
     source: Optional[str] = None,
     limit: int = 100,
+    offset: int = 0,
     db: AsyncSession = Depends(get_db)
 ):
-    query = select(LogEntry).order_by(desc(LogEntry.created_at)).limit(limit)
+    query = select(LogEntry).order_by(desc(LogEntry.created_at)).offset(offset).limit(limit)
     
     if level:
         query = query.filter(LogEntry.level == level)
@@ -71,10 +72,11 @@ async def get_logs(
 async def get_trade_logs(
     symbol: Optional[str] = None,
     limit: int = 100,
+    offset: int = 0,
     db: AsyncSession = Depends(get_db)
 ):
     """Get executed orders (trade log)"""
-    query = select(Order).order_by(desc(Order.created_at)).limit(limit)
+    query = select(Order).order_by(desc(Order.created_at)).offset(offset).limit(limit)
     
     if symbol:
         query = query.filter(Order.symbol == symbol)
@@ -87,10 +89,11 @@ async def get_signal_logs(
     symbol: Optional[str] = None,
     strategy: Optional[str] = None,
     limit: int = 100,
+    offset: int = 0,
     db: AsyncSession = Depends(get_db)
 ):
     """Get signal logs"""
-    query = select(SignalLog).order_by(desc(SignalLog.created_at)).limit(limit)
+    query = select(SignalLog).order_by(desc(SignalLog.created_at)).offset(offset).limit(limit)
     
     if symbol:
         query = query.filter(SignalLog.symbol == symbol)

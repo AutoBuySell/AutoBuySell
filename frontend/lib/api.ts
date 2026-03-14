@@ -192,16 +192,16 @@ export const backtestApi = {
 };
 
 export const logApi = {
-    getLogs: async (limit: number = 100) => {
-        const { data } = await apiClient.get<LogEntry[]>('/logs/', { params: { limit } });
+    getLogs: async (limit: number = 100, offset: number = 0) => {
+        const { data } = await apiClient.get<LogEntry[]>('/logs/', { params: { limit, offset } });
         return data;
     },
-    getTrades: async (limit: number = 100, symbol?: string) => {
-        const { data } = await apiClient.get<any[]>('/logs/trades', { params: { limit, symbol } });
+    getTrades: async (limit: number = 100, symbol?: string, offset: number = 0) => {
+        const { data } = await apiClient.get<any[]>('/logs/trades', { params: { limit, symbol, offset } });
         return data;
     },
-    getSignals: async (limit: number = 100, symbol?: string) => {
-        const { data } = await apiClient.get<any[]>('/logs/signals', { params: { limit, symbol } });
+    getSignals: async (limit: number = 100, symbol?: string, offset: number = 0) => {
+        const { data } = await apiClient.get<any[]>('/logs/signals', { params: { limit, symbol, offset } });
         return data;
     }
 };
