@@ -8,7 +8,7 @@ import uuid
 
 from app.core.database import get_db
 from app.services.backtest import BacktestService
-from app.domain.models import BacktestRun, BacktestResult
+from app.domain.models import BacktestRun, BacktestResult, StrategyParam
 
 router = APIRouter()
 
@@ -32,7 +32,31 @@ async def run_backtest(
 ):
     """Start a backtest in background"""
     service = BacktestService(db)
-    
+
+    # Validate backtest params before queueing.
+    # Backtest must not run with target_value <= 0 (would break sizing math).
+    resolved_params = req.params.copy() if req.params else None
+    if resolved_params is None:
+        stmt = select(StrategyParam).where(
+            StrategyParam.strategy_name == req.strategy_name,
+            StrategyParam.is_active == True,
+            StrategyParam.symbol.is_(None)
+        )
+        p_res = await db.execute(stmt)
+        p = p_res.scalar_one_or_none()
+        resolved_params = (p.params or {}) if p else {}
+
+    target_value = resolved_params.get("target_value") if isinstance(resolved_params, dict) else None
+    if target_value is not None:
+        try:
+            if float(target_value) <= 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Backtest requires target_value > 0. 운영 실주문 차단용 target_value=0은 백테스트에서 사용할 수 없습니다."
+                )
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid target_value in backtest params")
+
     # We need a new session for the background task, 
     # but BacktestService takes 'db' in init.
     # The 'db' dependency here is closed after request.
