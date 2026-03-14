@@ -82,10 +82,13 @@ async def get_equity_performance(
         fills = [f for f in fills_all if str(f.symbol).upper() == symbol.upper()]
         fills.sort(key=lambda x: x.executed_at)
 
-        curr_qty = 0.0
-        curr_avg_cost = 0.0
+        positions = await broker.get_positions()
+        pos = next((p for p in positions if p.symbol == symbol), None)
+
+        curr_qty = float(pos.qty) if pos else 0.0
+        curr_avg_cost = float(pos.avg_entry_price) if pos else 0.0
         curr_realized = 0.0
-        total_bought = 0.0
+        total_bought = curr_avg_cost * curr_qty
         total_sold = 0.0
         fill_idx = 0
 
