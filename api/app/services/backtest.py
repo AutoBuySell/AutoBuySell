@@ -212,6 +212,8 @@ class BacktestService:
             start_point_ts = {}  # Legacy parity: single anchor updated after executed order
             total_times = len(sorted_times)
 
+            benchmark_symbol = symbols[0] if symbols else None
+
             for time_idx, current_time in enumerate(sorted_times):
                 # 1. Update Market Value for Equity Calc
                 # We need closing prices for ALL held positions to calculate accurate equity.
@@ -338,9 +340,15 @@ class BacktestService:
                     if sym in time_candles:
                         total_equity += qty * time_candles[sym].close
                     
+                benchmark_price = None
+                if benchmark_symbol and benchmark_symbol in time_candles:
+                    benchmark_price = float(time_candles[benchmark_symbol].close)
+
                 equity_curve.append({
                     "time": current_time.isoformat(),
-                    "equity": total_equity
+                    "equity": total_equity,
+                    "price": benchmark_price,
+                    "price_symbol": benchmark_symbol
                 })
                 
                 # Broadcast progress via WebSocket

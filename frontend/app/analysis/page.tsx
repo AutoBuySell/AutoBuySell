@@ -376,7 +376,12 @@ export default function AnalysisPage() {
                       ))}
                   </div>
               ) : (
-                  <div className="mt-1">Equity: ${Number(point.equity).toFixed(2)}</div>
+                  <div className="mt-1 space-y-1">
+                      <div>Equity: ${Number(point.equity).toFixed(2)}</div>
+                      {point.price != null && (
+                          <div>Price ({point.price_symbol || 'symbol'}): ${Number(point.price).toFixed(2)}</div>
+                      )}
+                  </div>
               )}
           </div>
       );
@@ -644,7 +649,17 @@ export default function AnalysisPage() {
                                         <YAxis 
                                             domain={['auto', 'auto']}
                                             yAxisId="main"
-                                            stroke="#888888"
+                                            stroke="#2563eb"
+                                            fontSize={12}
+                                            tickLine={false}
+                                            axisLine={false}
+                                            tickFormatter={(value) => `$${value}`}
+                                        />
+                                        <YAxis
+                                            domain={['auto', 'auto']}
+                                            yAxisId="price"
+                                            orientation="right"
+                                            stroke="#f59e0b"
                                             fontSize={12}
                                             tickLine={false}
                                             axisLine={false}
@@ -663,6 +678,20 @@ export default function AnalysisPage() {
                                             dot={false}
                                             activeDot={!(showSignals || showOrders)}
                                             isAnimationActive={false}
+                                            name="Equity"
+                                        />
+                                        <Line
+                                            type="monotone"
+                                            dataKey="price"
+                                            xAxisId="main"
+                                            yAxisId="price"
+                                            stroke="#f59e0b"
+                                            strokeWidth={2}
+                                            dot={false}
+                                            activeDot={false}
+                                            isAnimationActive={false}
+                                            connectNulls
+                                            name="Price"
                                         />
                                         <Line
                                             type="monotone"
