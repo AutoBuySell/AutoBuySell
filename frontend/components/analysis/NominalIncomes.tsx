@@ -68,7 +68,7 @@ export default function NominalIncomes({ refreshTrigger }: { refreshTrigger?: nu
                                     fontSize={12} 
                                     tickLine={false} 
                                     axisLine={false}
-                                    tickFormatter={(val) => `$${val}`}
+                                    tickFormatter={(val) => `$${Number(val).toFixed(1)}`}
                                 />
                                 <Tooltip 
                                     cursor={{fill: 'transparent'}}

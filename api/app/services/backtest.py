@@ -65,20 +65,37 @@ class BacktestService:
                 timeframe=timeframe,
             )
 
-        # Verify at least requested-period candles exist per symbol.
+        # Verify requested-period candles exist with sufficient range coverage per symbol.
         start_dt = datetime.combine(start_date, time.min).replace(tzinfo=timezone.utc)
         end_dt = datetime.combine(end_date, time.max).replace(tzinfo=timezone.utc)
         still_missing = []
+        insufficient_coverage = []
         for sym in symbols:
-            cnt_res = await self.db.execute(
+            rows_res = await self.db.execute(
                 select(Candle)
                 .where(Candle.symbol == sym)
                 .where(Candle.timeframe == timeframe)
                 .where(Candle.timestamp >= start_dt)
                 .where(Candle.timestamp <= end_dt)
+                .order_by(Candle.timestamp.asc())
             )
-            if len(cnt_res.scalars().all()) == 0:
+            rows = rows_res.scalars().all()
+            if len(rows) == 0:
                 still_missing.append(sym)
+                continue
+
+            first_ts = rows[0].timestamp
+            last_ts = rows[-1].timestamp
+            tf_minutes = self._timeframe_minutes(timeframe)
+            max_start_gap = timedelta(minutes=tf_minutes * 2)
+            max_end_gap = timedelta(minutes=tf_minutes * 2)
+
+            if (first_ts - start_dt) > max_start_gap or (end_dt - last_ts) > max_end_gap:
+                insufficient_coverage.append({
+                    "symbol": sym,
+                    "first": first_ts.isoformat(),
+                    "last": last_ts.isoformat(),
+                })
 
         if still_missing:
             if settings.BROKER_MODE.lower() == "kis" and timeframe.lower() in {"1min", "1m", "5min", "5m", "15min", "15m", "30min", "30m", "1hour", "1h"}:
@@ -90,6 +107,12 @@ class BacktestService:
             raise ValueError(
                 f"No candle data for symbols={still_missing}, timeframe={timeframe}, "
                 f"range={start_date}~{end_date} after auto-download"
+            )
+
+        if insufficient_coverage:
+            raise ValueError(
+                f"Insufficient candle coverage for requested range {start_date}~{end_date} (timeframe={timeframe}). "
+                f"Coverage={insufficient_coverage}. Try shorter period or ensure full data download first."
             )
 
     async def run_backtest(

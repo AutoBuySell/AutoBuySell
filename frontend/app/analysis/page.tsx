@@ -680,7 +680,7 @@ export default function AnalysisPage() {
                                             fontSize={12}
                                             tickLine={false}
                                             axisLine={false}
-                                            tickFormatter={(value) => `$${value}`}
+                                            tickFormatter={(value) => `$${Number(value).toFixed(1)}`}
                                         />
                                         {hasBacktestPrice && (
                                             <YAxis
@@ -691,7 +691,7 @@ export default function AnalysisPage() {
                                                 fontSize={12}
                                                 tickLine={false}
                                                 axisLine={false}
-                                                tickFormatter={(value) => `$${value}`}
+                                                tickFormatter={(value) => `$${Number(value).toFixed(1)}`}
                                             />
                                         )}
                                         <Tooltip 
@@ -792,7 +792,7 @@ export default function AnalysisPage() {
                                                 fontSize={12}
                                                 tickLine={false}
                                                 axisLine={false}
-                                                tickFormatter={(value) => `$${value}`}
+                                                tickFormatter={(value) => `$${Number(value).toFixed(1)}`}
                                            />
                                            <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
                                            <Tooltip 

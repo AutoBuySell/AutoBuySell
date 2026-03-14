@@ -147,7 +147,7 @@ export default function EachEquityPerformance() {
                                         fontSize={12} 
                                         tickLine={false} 
                                         axisLine={false}
-                                        tickFormatter={(val) => `$${val}`}
+                                        tickFormatter={(val) => `$${Number(val).toFixed(1)}`}
                                     />
                                     <Tooltip 
                                         labelFormatter={(label) => label.split('T')[0]}
@@ -231,7 +231,7 @@ export default function EachEquityPerformance() {
                                         fontSize={12} 
                                         tickLine={false} 
                                         axisLine={false}
-                                        tickFormatter={(val) => `$${val}`}
+                                        tickFormatter={(val) => `$${Number(val).toFixed(1)}`}
                                     />
                                     <Tooltip 
                                         labelFormatter={(label) => label.split('T')[0]}
@@ -272,7 +272,7 @@ export default function EachEquityPerformance() {
                                         fontSize={12} 
                                         tickLine={false} 
                                         axisLine={false}
-                                        tickFormatter={(val) => `$${val}`}
+                                        tickFormatter={(val) => `$${Number(val).toFixed(1)}`}
                                     />
                                     <Tooltip 
                                         labelFormatter={(label) => label.split('T')[0]}
@@ -313,7 +313,7 @@ export default function EachEquityPerformance() {
                                         fontSize={12} 
                                         tickLine={false} 
                                         axisLine={false}
-                                        tickFormatter={(val) => `$${val}`}
+                                        tickFormatter={(val) => `$${Number(val).toFixed(1)}`}
                                     />
                                     <Tooltip 
                                         labelFormatter={(label) => label.split('T')[0]}
