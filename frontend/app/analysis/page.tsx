@@ -777,43 +777,9 @@ export default function AnalysisPage() {
                   </Card>
               </div>
 
-              {/* Bottom Row: Transactions & Asset List */}
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                  <div className="lg:col-span-2">
-                       <Transactions limit={20} refreshTrigger={refreshTrigger} />
-                  </div>
-                  
-                  {/* Small Asset Allocation List */}
-                  <Card>
-                      <CardHeader>
-                          <CardTitle>Holdings Summary</CardTitle>
-                      </CardHeader>
-                      <CardContent>
-                           <table className="w-full text-sm">
-                               <thead>
-                                   <tr className="border-b text-left">
-                                       <th className="pb-2">Symbol</th>
-                                       <th className="pb-2 text-right">Value</th>
-                                       <th className="pb-2 text-right">P/L %</th>
-                                   </tr>
-                               </thead>
-                               <tbody>
-                                   {positions.map(p => (
-                                       <tr key={p.symbol} className="border-b last:border-0 hover:bg-muted/50">
-                                           <td className="py-2">{p.symbol}</td>
-                                           <td className="py-2 text-right">${p.market_value.toLocaleString()}</td>
-                                           <td className={`py-2 text-right ${p.unrealized_plpc >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                                               {(p.unrealized_plpc * 100).toFixed(2)}%
-                                           </td>
-                                       </tr>
-                                  ))}
-                                   {positions.length === 0 && (
-                                       <tr><td colSpan={3} className="py-4 text-center text-muted-foreground">No positions</td></tr>
-                                   )}
-                               </tbody>
-                           </table>
-                      </CardContent>
-                  </Card>
+              {/* Bottom Row: Transactions */}
+              <div className="grid grid-cols-1 gap-6">
+                  <Transactions limit={20} refreshTrigger={refreshTrigger} />
               </div>
           </div>
       )}

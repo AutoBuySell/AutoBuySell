@@ -79,6 +79,9 @@ export default function Home() {
               <p className="text-xs text-muted-foreground">
                 Cash: {account ? `$${account.cash.toLocaleString()}` : '-'}
               </p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Mode: {account ? (account.is_paper ? 'Paper' : 'Live') : '-'}
+              </p>
             </CardContent>
           </Card>
           
@@ -121,6 +124,45 @@ export default function Home() {
               {error}
             </div>
           )}
+
+          <Card className="col-span-4">
+            <CardHeader>
+              <CardTitle className="text-sm font-medium">Current Holdings Snapshot</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {positions.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No active holdings yet.</p>
+              ) : (
+                <div className="overflow-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b text-left">
+                        <th className="py-2">Symbol</th>
+                        <th className="py-2 text-right">Qty</th>
+                        <th className="py-2 text-right">Market Value</th>
+                        <th className="py-2 text-right">Unrealized P/L</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[...positions]
+                        .sort((a, b) => Math.abs(b.market_value) - Math.abs(a.market_value))
+                        .slice(0, 8)
+                        .map((p) => (
+                          <tr key={p.symbol} className="border-b last:border-0">
+                            <td className="py-2 font-medium">{p.symbol}</td>
+                            <td className="py-2 text-right">{p.qty}</td>
+                            <td className="py-2 text-right">${p.market_value.toLocaleString()}</td>
+                            <td className={`py-2 text-right ${p.unrealized_pl >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                              ${p.unrealized_pl.toLocaleString()}
+                            </td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </div>
       )}
 
