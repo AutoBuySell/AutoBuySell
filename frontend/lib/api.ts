@@ -2,9 +2,23 @@ import axios from 'axios';
 
 // Base URL for all API v1 endpoints
 // Base URL for all API v1 endpoints
-const API_BASE = typeof window !== 'undefined' 
-    ? `http://${window.location.hostname}:8000/api/v1`
-    : (process.env.NEXT_PUBLIC_BACKEND_SERVER_URL || 'http://localhost:8000/api/v1');
+const API_BASE = (() => {
+  const explicit = process.env.NEXT_PUBLIC_BACKEND_SERVER_URL;
+  if (explicit && explicit.trim().length > 0) {
+    return explicit.replace(/\/$/, '');
+  }
+
+  if (typeof window !== 'undefined') {
+    const configuredPort = process.env.NEXT_PUBLIC_BACKEND_PORT;
+    if (configuredPort && configuredPort.trim().length > 0) {
+      return `${window.location.protocol}//${window.location.hostname}:${configuredPort}/api/v1`;
+    }
+    // Same-origin fallback (works behind reverse proxy)
+    return `${window.location.origin}/api/v1`;
+  }
+
+  return 'http://localhost:8000/api/v1';
+})();
 
 export const apiClient = axios.create({
   baseURL: API_BASE,
