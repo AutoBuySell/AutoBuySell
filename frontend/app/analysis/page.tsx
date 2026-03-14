@@ -326,8 +326,14 @@ export default function AnalysisPage() {
       })
       .filter((point) => Number.isFinite(point.timeMs))
       .sort((a, b) => a.timeMs - b.timeMs);
-  const backtestEquityDomain = getPaddedDomain(equityCurve.map((p: any) => Number(p.equity || 0)));
-  const backtestPriceDomain = getPaddedDomain(equityCurve.map((p: any) => Number(p.price || 0)).filter((v: number) => Number.isFinite(v) && v > 0));
+  const backtestEquityDomain = getPaddedDomain(
+      equityCurve.map((p: any) => Number(p.equity || 0)).filter((v: number) => Number.isFinite(v))
+  );
+  const backtestPriceValues = equityCurve
+      .map((p: any) => Number(p.price))
+      .filter((v: number) => Number.isFinite(v) && v > 0);
+  const hasBacktestPrice = backtestPriceValues.length > 0;
+  const backtestPriceDomain = hasBacktestPrice ? getPaddedDomain(backtestPriceValues) : [0, 1];
 
   const renderEventDot = (props: any) => {
       const { cx, cy, payload } = props;
@@ -628,6 +634,11 @@ export default function AnalysisPage() {
     
                             <div className="h-[400px] w-full border rounded p-2 flex flex-col">
                                 <div className="flex items-center gap-4 px-2 pb-2 text-sm">
+                                    {!hasBacktestPrice && (
+                                        <span className="text-xs text-amber-600">
+                                            Price line unavailable for this run (created before price-overlay patch). Run a new backtest to display price.
+                                        </span>
+                                    )}
                                     <label className="flex items-center gap-2">
                                         <input
                                             type="checkbox"
@@ -671,16 +682,18 @@ export default function AnalysisPage() {
                                             axisLine={false}
                                             tickFormatter={(value) => `$${value}`}
                                         />
-                                        <YAxis
-                                            domain={backtestPriceDomain}
-                                            yAxisId="price"
-                                            orientation="right"
-                                            stroke="#f59e0b"
-                                            fontSize={12}
-                                            tickLine={false}
-                                            axisLine={false}
-                                            tickFormatter={(value) => `$${value}`}
-                                        />
+                                        {hasBacktestPrice && (
+                                            <YAxis
+                                                domain={backtestPriceDomain}
+                                                yAxisId="price"
+                                                orientation="right"
+                                                stroke="#f59e0b"
+                                                fontSize={12}
+                                                tickLine={false}
+                                                axisLine={false}
+                                                tickFormatter={(value) => `$${value}`}
+                                            />
+                                        )}
                                         <Tooltip 
                                             content={renderTooltip}
                                         />
@@ -696,19 +709,21 @@ export default function AnalysisPage() {
                                             isAnimationActive={false}
                                             name="Equity"
                                         />
-                                        <Line
-                                            type="monotone"
-                                            dataKey="price"
-                                            xAxisId="main"
-                                            yAxisId="price"
-                                            stroke="#f59e0b"
-                                            strokeWidth={2}
-                                            dot={false}
-                                            activeDot={false}
-                                            isAnimationActive={false}
-                                            connectNulls
-                                            name="Price"
-                                        />
+                                        {hasBacktestPrice && (
+                                            <Line
+                                                type="monotone"
+                                                dataKey="price"
+                                                xAxisId="main"
+                                                yAxisId="price"
+                                                stroke="#f59e0b"
+                                                strokeWidth={2}
+                                                dot={false}
+                                                activeDot={false}
+                                                isAnimationActive={false}
+                                                connectNulls
+                                                name="Price"
+                                            />
+                                        )}
                                         <Line
                                             type="monotone"
                                             dataKey="equity"
