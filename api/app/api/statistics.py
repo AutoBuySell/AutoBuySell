@@ -63,32 +63,74 @@ async def get_equity_performance(
     candles = candles_res.scalars().all()
     
     if not candles:
-        # Fallback for fresh DB: pull recent broker daily bars and synthesize equity curve.
+        # Fallback for fresh DB: reconstruct from broker daily bars + broker trade fills.
         trading_service = request.app.state.trading_service
         broker = trading_service.broker
-        bars = await broker.get_historicals(symbol, "1D", 90)
+        bars = await broker.get_historicals(symbol, "1D", 180)
         if not bars:
             return {"data": []}
 
-        positions = await broker.get_positions()
-        pos = next((p for p in positions if p.symbol == symbol), None)
-        curr_qty = float(pos.qty) if pos else 0.0
-        avg_cost = float(pos.avg_entry_price) if pos else 0.0
+        # Keep only requested period window
+        bars = [b for b in bars if b.timestamp >= start_date]
+        if not bars:
+            return {"data": []}
+
+        fills_all = await broker.get_trade_fills(limit=2000)
+        fills = [f for f in fills_all if str(f.symbol).upper() == symbol.upper()]
+        fills.sort(key=lambda x: x.executed_at)
+
+        curr_qty = 0.0
+        curr_avg_cost = 0.0
+        curr_realized = 0.0
+        total_bought = 0.0
+        total_sold = 0.0
+        fill_idx = 0
 
         history_data = []
         for b in bars:
+            bar_dt = b.timestamp
+
+            # apply fills up to each bar timestamp
+            while fill_idx < len(fills) and fills[fill_idx].executed_at <= bar_dt:
+                f = fills[fill_idx]
+                qty = float(f.qty)
+                price = float(f.price)
+                commission = float(getattr(f, 'commission', 0.0) or 0.0)
+                side = str(f.side).lower()
+
+                if side == 'buy':
+                    buy_cost = qty * price + commission
+                    total_bought += buy_cost
+                    total_val = (curr_qty * curr_avg_cost) + buy_cost
+                    curr_qty += qty
+                    if curr_qty > 0:
+                        curr_avg_cost = total_val / curr_qty
+                else:  # sell
+                    qty_sold = min(qty, curr_qty) if curr_qty > 0 else qty
+                    sell_revenue = qty * price - commission
+                    total_sold += sell_revenue
+                    curr_realized += (price - curr_avg_cost) * qty_sold - commission
+                    curr_qty -= qty
+                    if curr_qty <= 0:
+                        curr_qty = max(curr_qty, 0.0)
+                        if curr_qty == 0:
+                            curr_avg_cost = 0.0
+
+                fill_idx += 1
+
             current_value = float(b.close) * curr_qty
-            unrealized_income = current_value - (avg_cost * curr_qty)
-            nominal_income = unrealized_income
+            unrealized_income = current_value - (curr_avg_cost * curr_qty)
+            nominal_income = current_value + total_sold - total_bought
+
             history_data.append({
                 "date": b.timestamp.date().isoformat(),
                 "price": float(b.close),
                 "qty": curr_qty,
                 "unrealized_income": unrealized_income,
-                "realized_income": 0.0,
+                "realized_income": curr_realized,
                 "nominal_income": nominal_income,
-                "total_bought": avg_cost * curr_qty,
-                "total_sold": 0.0,
+                "total_bought": total_bought,
+                "total_sold": total_sold,
             })
 
         return {"data": history_data}
