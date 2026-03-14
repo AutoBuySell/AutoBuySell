@@ -161,16 +161,19 @@ class DataService:
         if settings.BROKER_MODE.lower() == "kis":
             broker = create_broker()
 
-            # KIS phase-1 supports daily flow; keep timeframe normalization minimal.
+            # KIS supports 1m/5m/15m/30m/1h/1d in broker adapter.
             tf_norm = timeframe.lower()
-            if tf_norm not in {"1d", "1day"}:
-                logger.warning(f"KIS mode currently supports only daily candles, got timeframe={timeframe}")
+            supported = {"1d", "1day", "1min", "1m", "5min", "5m", "15min", "15m", "30min", "30m", "1hour", "1h"}
+            if tf_norm not in supported:
+                logger.warning(f"KIS mode unsupported timeframe={timeframe}")
                 return 0
+
+            fetch_limit = 120 if tf_norm not in {"1d", "1day"} else 1000
 
             added_keys = set()
             for sym in symbols:
                 try:
-                    bars = await broker.get_historicals(sym, timeframe, 1000)
+                    bars = await broker.get_historicals(sym, timeframe, fetch_limit)
                 except Exception as e:
                     logger.error(f"KIS historical fetch failed for {sym}: {e}")
                     continue

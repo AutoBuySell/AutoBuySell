@@ -158,10 +158,15 @@ class KISBroker(BrokerAdapter):
         return float(output.get("last", 0) or 0)
 
     async def get_account_info(self) -> AccountInfo:
-        # US overseas balance query
-        url = f"{self.base_url}/uapi/overseas-stock/v1/trading/inquire-balance"
-        headers = await self._headers("VTTS3012R" if settings.KIS_IS_PAPER else "TTTS3012R")
-        params = {
+        """
+        Build account summary using multiple KIS endpoints for stable cash/equity fields.
+        - inquire-balance: position valuation summary
+        - inquire-present-balance: cash/deposit style fields
+        - inquire-psamount: orderable amount snapshot (symbol-based)
+        """
+        bal_url = f"{self.base_url}/uapi/overseas-stock/v1/trading/inquire-balance"
+        bal_headers = await self._headers("VTTS3012R" if settings.KIS_IS_PAPER else "TTTS3012R")
+        bal_params = {
             "CANO": self.cano,
             "ACNT_PRDT_CD": self.acnt_prdt_cd,
             "OVRS_EXCG_CD": self.us_exchange,
@@ -170,15 +175,67 @@ class KISBroker(BrokerAdapter):
             "CTX_AREA_NK200": "",
         }
 
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp, data = await self._request_with_retry(client, "GET", url, headers=headers, params=params, attempts=4)
-            if resp.status_code >= 400:
-                raise RuntimeError(f"KIS account query failed: status={resp.status_code}, body={data}")
+        present_url = f"{self.base_url}/uapi/overseas-stock/v1/trading/inquire-present-balance"
+        present_headers = await self._headers("VTRP6504R" if settings.KIS_IS_PAPER else "CTRP6504R")
+        present_params = {
+            "CANO": self.cano,
+            "ACNT_PRDT_CD": self.acnt_prdt_cd,
+            "WCRC_FRCR_DVSN_CD": "01",
+            "NATN_CD": "000",
+            "TR_MKET_CD": "00",
+            "INQR_DVSN_CD": "00",
+        }
 
-        output2 = data.get("output2") or {}
-        cash = float(output2.get("frcr_dncl_amt_2", 0) or 0)
-        portfolio = float(output2.get("tot_evlu_pfls_amt", 0) or 0)
-        buying_power = float(output2.get("ovrs_ord_psbl_amt", cash) or cash)
+        orderable_url = f"{self.base_url}/uapi/overseas-stock/v1/trading/inquire-psamount"
+        orderable_headers = await self._headers("VTTS3007R" if settings.KIS_IS_PAPER else "TTTS3007R")
+        # Symbol for probing orderable cash (safe large-cap default)
+        probe_symbol = "AAPL"
+        orderable_params = {
+            "CANO": self.cano,
+            "ACNT_PRDT_CD": self.acnt_prdt_cd,
+            "OVRS_EXCG_CD": self._exchange_codes_for_symbol(probe_symbol)[0],
+            "OVRS_ORD_UNPR": "100",
+            "ITEM_CD": probe_symbol,
+        }
+
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            bal_resp, bal_data = await self._request_with_retry(client, "GET", bal_url, headers=bal_headers, params=bal_params, attempts=4)
+            if bal_resp.status_code >= 400:
+                raise RuntimeError(f"KIS account query failed: status={bal_resp.status_code}, body={bal_data}")
+
+            present_resp, present_data = await self._request_with_retry(client, "GET", present_url, headers=present_headers, params=present_params, attempts=4)
+            if present_resp.status_code >= 400:
+                present_data = {}
+
+            ord_resp, ord_data = await self._request_with_retry(client, "GET", orderable_url, headers=orderable_headers, params=orderable_params, attempts=3)
+            if ord_resp.status_code >= 400:
+                ord_data = {}
+
+        bal_out2 = bal_data.get("output2") or {}
+        present_out2_list = present_data.get("output2") or []
+        present_out2 = present_out2_list[0] if present_out2_list else {}
+        present_out3 = present_data.get("output3") or {}
+        ord_out = ord_data.get("output") or {}
+
+        # Cash (prefer present-balance fields)
+        cash = float(
+            present_out2.get("frcr_dncl_amt_2", 0)
+            or present_out3.get("tot_dncl_amt", 0)
+            or bal_out2.get("frcr_dncl_amt_2", 0)
+            or 0
+        )
+
+        # Equity in USD: use position valuation + cash (avoid KRW-converted total fields).
+        position_value = float(bal_out2.get("tot_evlu_pfls_amt", 0) or 0)
+        portfolio = position_value + cash
+
+        buying_power = float(
+            ord_out.get("ovrs_ord_psbl_amt", 0)
+            or ord_out.get("ord_psbl_frcr_amt", 0)
+            or present_out3.get("frcr_use_psbl_amt", 0)
+            or bal_out2.get("ovrs_ord_psbl_amt", 0)
+            or cash
+        )
 
         return AccountInfo(
             account_id=f"{self.cano}-{self.acnt_prdt_cd}",
@@ -507,13 +564,15 @@ class KISBroker(BrokerAdapter):
         tr_id = "VTTS3035R" if settings.KIS_IS_PAPER else "TTTS3035R"
         headers = await self._headers(tr_id)
 
-        today = datetime.now().strftime("%Y%m%d")
+        today = datetime.now()
+        start_dt = (today - timedelta(days=180)).strftime("%Y%m%d")
+        end_dt = today.strftime("%Y%m%d")
         params = {
             "CANO": self.cano,
             "ACNT_PRDT_CD": self.acnt_prdt_cd,
             "PDNO": "",
-            "ORD_STRT_DT": today,
-            "ORD_END_DT": today,
+            "ORD_STRT_DT": start_dt,
+            "ORD_END_DT": end_dt,
             "SLL_BUY_DVSN": "00",
             "CCLD_NCCS_DVSN": "00",  # demo only supports 00
             "OVRS_EXCG_CD": "",
@@ -552,7 +611,7 @@ class KISBroker(BrokerAdapter):
             price = float(row.get("ft_ccld_unpr3", 0) or row.get("ft_ord_unpr3", 0) or 0)
 
             # timestamp parse: KIS date/time fields are usually in Korea local time
-            ord_dt = str(row.get("ord_dt", "") or today)
+            ord_dt = str(row.get("ord_dt", "") or end_dt)
             ord_tm = str(row.get("ord_tmd", "") or "000000").zfill(6)
             try:
                 executed_local = datetime.strptime(f"{ord_dt}{ord_tm}", "%Y%m%d%H%M%S").replace(tzinfo=ZoneInfo("Asia/Seoul"))

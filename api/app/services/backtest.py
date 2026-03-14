@@ -11,6 +11,7 @@ from app.strategies.registry import get_all_strategies  # Centralized registry
 from app.brokers.base import AccountInfo
 from app.api.ws import manager  # WebSocket manager
 from app.services.data import DataService
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +81,12 @@ class BacktestService:
                 still_missing.append(sym)
 
         if still_missing:
+            if settings.BROKER_MODE.lower() == "kis" and timeframe.lower() in {"1min", "1m", "5min", "5m", "15min", "15m", "30min", "30m", "1hour", "1h"}:
+                raise ValueError(
+                    f"KIS intraday historical window is limited for timeframe={timeframe}. "
+                    f"Missing symbols={still_missing} in range={start_date}~{end_date}. "
+                    f"Try shorter period or 1D timeframe."
+                )
             raise ValueError(
                 f"No candle data for symbols={still_missing}, timeframe={timeframe}, "
                 f"range={start_date}~{end_date} after auto-download"
