@@ -13,17 +13,20 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState<Tab>('overview');
   const [account, setAccount] = useState<AccountInfo | null>(null);
   const [positions, setPositions] = useState<Position[]>([]);
+  const [status, setStatus] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const fetchData = async () => {
       try {
-        const [accData, posData] = await Promise.all([
+        const [accData, posData, statusData] = await Promise.all([
           tradingApi.getAccount(),
           tradingApi.getPositions(),
+          tradingApi.getStatus(),
         ]);
         setAccount(accData);
         setPositions(posData);
+        setStatus(statusData);
       } catch (err) {
         console.error("Failed to fetch data", err);
         setError("Failed to connect to Trading API. Check console.");
@@ -64,6 +67,29 @@ export default function Home() {
           </button>
         ))}
       </div>
+
+      {/* Current account banner (always visible) */}
+      {(() => {
+        const current = status?.accounts?.[0];
+        const mode = account ? (account.is_paper ? 'PAPER' : 'LIVE') : '-';
+        return (
+          <Card className="border-blue-200 bg-blue-50/40">
+            <CardContent className="py-3">
+              <div className="text-sm font-semibold">
+                Current Account: {current?.account_name || 'N/A'}
+              </div>
+              <div className="text-xs text-muted-foreground mt-1">
+                Broker: {current?.broker || '-'} · Mode: {mode}
+              </div>
+              {current?.account_description && (
+                <div className="text-xs text-muted-foreground mt-1">
+                  {current.account_description}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        );
+      })()}
 
       {/* Tab Content */}
       {activeTab === 'overview' && (

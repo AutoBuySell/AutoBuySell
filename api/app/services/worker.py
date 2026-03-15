@@ -45,11 +45,13 @@ class AccountWorker:
         account_name: str,
         broker: BrokerAdapter,
         execution: ExecutionService,
+        account_description: str = "",
     ):
         self.account_id = account_id
         self.account_name = account_name
         self.broker = broker
         self.execution = execution
+        self.account_description = account_description or ""
 
         self.strategies = get_all_strategies()
         self.active_strategy_name = next(iter(self.strategies.keys()))
@@ -464,6 +466,7 @@ class AccountWorker:
         return {
             "account_id": str(self.account_id),
             "account_name": self.account_name,
+            "account_description": self.account_description,
             "active_strategy": self.active_strategy_name,
             "available_strategies": list(self.strategies.keys()),
             "broker": self.broker.__class__.__name__,
