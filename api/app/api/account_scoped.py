@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import List, Optional
 from uuid import UUID
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
@@ -49,6 +50,7 @@ class TradeLogResponse(BaseModel):
     filled_qty: float
     filled_avg_price: Optional[float]
     strategy_name: Optional[str]
+    created_at: datetime
 
 
 class SignalLogResponse(BaseModel):
@@ -58,6 +60,7 @@ class SignalLogResponse(BaseModel):
     signal_type: str
     signal_strength: float
     raw_data: Optional[dict]
+    created_at: datetime
 
 
 class SystemLogResponse(BaseModel):
@@ -66,6 +69,7 @@ class SystemLogResponse(BaseModel):
     source: str
     message: str
     context: Optional[dict]
+    created_at: datetime
 
 
 def _get_coordinator(request: Request) -> TradingCoordinator:
