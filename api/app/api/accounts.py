@@ -19,6 +19,7 @@ router = APIRouter()
 
 class AccountResponse(BaseModel):
     id: UUID
+    external_id: str
     name: str
     broker_type: str
     config: dict
@@ -29,6 +30,7 @@ class AccountResponse(BaseModel):
 
 
 class AccountCreateRequest(BaseModel):
+    external_id: str
     name: str
     broker_type: str  # 'alpaca' | 'kis'
     credentials: dict
@@ -36,6 +38,7 @@ class AccountCreateRequest(BaseModel):
 
 
 class AccountUpdateRequest(BaseModel):
+    external_id: Optional[str] = None
     name: Optional[str] = None
     credentials: Optional[dict] = None
     config: Optional[dict] = None
@@ -82,6 +85,7 @@ async def get_account(account_id: UUID, db: AsyncSession = Depends(get_db)):
 async def create_account(req: AccountCreateRequest, db: AsyncSession = Depends(get_db)):
     """Create a new broker account. Requires server restart to take effect."""
     account = BrokerAccount(
+        external_id=req.external_id,
         name=req.name,
         broker_type=req.broker_type,
         credentials=req.credentials,
@@ -107,6 +111,8 @@ async def update_account(
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
 
+    if req.external_id is not None:
+        account.external_id = req.external_id
     if req.name is not None:
         account.name = req.name
     if req.credentials is not None:
