@@ -251,7 +251,8 @@ class AccountWorker:
             if state:
                 trade_sync_after = datetime.fromisoformat(state.value)
 
-            fills = await self.broker.get_trade_fills(limit=100)
+            # Broker adapters return fills across all symbols; use high limit per sync run.
+            fills = await self.broker.get_trade_fills(limit=2000)
             synced_count = 0
             external_count = 0
 
@@ -278,8 +279,26 @@ class AccountWorker:
                         )
                     )
                     order = order_result.scalar_one_or_none()
+                    if order:
+                        source = "system"
 
-                # Ensure external fills still create orders for consistent logs/analysis.
+                # 1) Write trade first
+                trade = Trade(
+                    account_id=self.account_id,
+                    order_id=order.id if order else None,
+                    symbol=fill.symbol,
+                    side=fill.side,
+                    qty=fill.qty,
+                    price=fill.price,
+                    commission=fill.commission,
+                    execution_id=fill.execution_id,
+                    source=source,
+                    created_at=fill.executed_at,
+                )
+                db.add(trade)
+                await db.flush()
+
+                # 2) Then ensure corresponding order exists for external fills
                 if not order:
                     external_count += 1
                     order = Order(
@@ -299,23 +318,8 @@ class AccountWorker:
                     )
                     db.add(order)
                     await db.flush()
-                else:
-                    source = "system"
+                    trade.order_id = order.id
 
-                db.add(
-                    Trade(
-                        account_id=self.account_id,
-                        order_id=order.id,
-                        symbol=fill.symbol,
-                        side=fill.side,
-                        qty=fill.qty,
-                        price=fill.price,
-                        commission=fill.commission,
-                        execution_id=fill.execution_id,
-                        source=source,
-                        created_at=fill.executed_at,
-                    )
-                )
                 synced_count += 1
 
             await db.commit()

@@ -87,8 +87,39 @@ class TradingCoordinator:
 
     # ── Lifecycle ──────────────────────────────────────────────────
 
+    def _ensure_scheduler_base_jobs(self):
+        if not self._scheduler_started:
+            self.scheduler.start()
+            self._scheduler_started = True
+
+        # Global job: daily watchlist candle sync (shared across accounts)
+        self.scheduler.add_job(
+            self._daily_watchlist_candle_sync_job,
+            CronTrigger(
+                day_of_week="mon-fri",
+                hour=19,
+                minute=10,
+                timezone="America/New_York",
+            ),
+            id="daily_watchlist_candle_sync",
+            replace_existing=True,
+        )
+
+    def _ensure_sync_jobs_for_all_accounts(self):
+        for aid, worker in self.workers.items():
+            self.scheduler.add_job(
+                worker.sync_trades,
+                IntervalTrigger(hours=1),
+                id=f"sync_trades:{aid}",
+                replace_existing=True,
+            )
+
     async def restore_state(self):
         """Restore all workers' state from DB on startup."""
+        # Sync-trades must run regardless of trading start/stop state.
+        self._ensure_scheduler_base_jobs()
+        self._ensure_sync_jobs_for_all_accounts()
+
         for account_id, worker in self.workers.items():
             should_run = await worker.load_state()
             if should_run:
@@ -97,22 +128,8 @@ class TradingCoordinator:
 
     async def start(self, account_id: Optional[UUID] = None, persist: bool = True):
         """Start trading for one or all accounts."""
-        if not self._scheduler_started:
-            self.scheduler.start()
-            self._scheduler_started = True
-
-            # Global job: daily watchlist candle sync (shared across accounts)
-            self.scheduler.add_job(
-                self._daily_watchlist_candle_sync_job,
-                CronTrigger(
-                    day_of_week="mon-fri",
-                    hour=19,
-                    minute=10,
-                    timezone="America/New_York",
-                ),
-                id="daily_watchlist_candle_sync",
-                replace_existing=True,
-            )
+        self._ensure_scheduler_base_jobs()
+        self._ensure_sync_jobs_for_all_accounts()
 
         targets = {account_id: self.workers[account_id]} if account_id else self.workers
 
@@ -148,12 +165,8 @@ class TradingCoordinator:
 
         for aid, worker in targets.items():
             cycle_job_id = f"trading_cycle:{aid}"
-            sync_job_id = f"sync_trades:{aid}"
-
             if self.scheduler.get_job(cycle_job_id):
                 self.scheduler.remove_job(cycle_job_id)
-            if self.scheduler.get_job(sync_job_id):
-                self.scheduler.remove_job(sync_job_id)
 
             if persist:
                 await worker.persist_running(False)
