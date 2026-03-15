@@ -4,18 +4,22 @@ import { useEffect, useState } from 'react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { logApi } from '@/lib/api';
 
-export default function Transactions({ limit = 50, refreshTrigger }: { limit?: number, refreshTrigger?: number }) {
+export default function Transactions({ accountId, limit = 50, refreshTrigger }: { accountId?: string, limit?: number, refreshTrigger?: number }) {
     const [trades, setTrades] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
         loadTrades();
         // No auto-polling - parent controls refresh
-    }, [refreshTrigger]);
+    }, [refreshTrigger, accountId]);
 
     const loadTrades = async () => {
         try {
-            const data = await logApi.getTrades(limit);
+            if (!accountId) {
+                setTrades([]);
+                return;
+            }
+            const data = await logApi.getTrades(accountId, limit);
             setTrades(data);
         } catch (e) {
             console.error("Failed to load trades", e);

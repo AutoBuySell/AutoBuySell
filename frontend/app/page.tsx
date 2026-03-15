@@ -23,7 +23,7 @@ export default function Home() {
       try {
         const [accountsData, statusData] = await Promise.all([
           accountsApi.list(true),
-          tradingApi.getStatus(),
+          tradingApi.getGlobalStatus(),
         ]);
 
         setAccounts(accountsData || []);
@@ -32,6 +32,13 @@ export default function Home() {
         const effectiveAccountId = accountId || selectedAccountId || statusData?.accounts?.[0]?.account_id;
         if (effectiveAccountId && !selectedAccountId) {
           setSelectedAccountId(effectiveAccountId);
+        }
+
+        if (!effectiveAccountId) {
+          setAccount(null);
+          setPositions([]);
+          setError('No active account available');
+          return;
         }
 
         try {
@@ -252,6 +259,7 @@ function SystemStatusCard({ accountId }: { accountId?: string }) {
 
     const refreshStatus = async () => {
         try {
+            if (!accountId) return;
             const data = await tradingApi.getStatus(accountId);
             setStatus(data);
         } catch (e) { console.error(e); }
@@ -260,6 +268,7 @@ function SystemStatusCard({ accountId }: { accountId?: string }) {
     const toggleTrading = async () => {
         setLoading(true);
         try {
+            if (!accountId) return;
             if (status?.is_running) {
                 await tradingApi.stop(accountId);
             } else {
@@ -276,6 +285,7 @@ function SystemStatusCard({ accountId }: { accountId?: string }) {
     const handleStrategyChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
         const newStrategy = e.target.value;
         try {
+            if (!accountId) return;
             await tradingApi.setStrategy(newStrategy, accountId);
             await refreshStatus();
         } catch (err) {

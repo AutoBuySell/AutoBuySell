@@ -125,44 +125,36 @@ const withAccount = (accountId?: string) => (
 );
 
 export const tradingApi = {
-  getAccount: async (accountId?: string) => {
-    const { data } = await apiClient.get<AccountInfo>('/trading/account', {
-      params: withAccount(accountId),
+  getGlobalStatus: async () => {
+    const { data } = await apiClient.get('/trading/status');
+    return data;
+  },
+  getAccount: async (accountId: string) => {
+    const { data } = await apiClient.get<AccountInfo>(`/accounts/${accountId}/trading/account`);
+    return data;
+  },
+  getPositions: async (accountId: string) => {
+    const { data } = await apiClient.get<Position[]>(`/accounts/${accountId}/trading/positions`);
+    return data;
+  },
+  getHistory: async (period: string = '1M', timeframe: string = '1D', accountId: string) => {
+    const { data } = await apiClient.get<PortfolioHistory>(`/accounts/${accountId}/trading/history`, {
+      params: { period, timeframe }
     });
     return data;
   },
-  getPositions: async (accountId?: string) => {
-    const { data } = await apiClient.get<Position[]>('/trading/positions', {
-      params: withAccount(accountId),
-    });
-    return data;
-  },
-  getHistory: async (period: string = '1M', timeframe: string = '1D', accountId?: string) => {
-    const { data } = await apiClient.get<PortfolioHistory>('/trading/history', {
-        params: { period, timeframe, ...withAccount(accountId) }
-    });
-    return data;
-  },
-  getStatus: async (accountId?: string) => {
-      const { data } = await apiClient.get('/trading/status', {
-        params: withAccount(accountId),
-      });
+  getStatus: async (accountId: string) => {
+      const { data } = await apiClient.get(`/accounts/${accountId}/trading/status`);
       return data;
   },
-  start: async (accountId?: string) => {
-      await apiClient.post('/trading/start', null, {
-        params: withAccount(accountId),
-      });
+  start: async (accountId: string) => {
+      await apiClient.post(`/accounts/${accountId}/trading/start`);
   },
-  stop: async (accountId?: string) => {
-      await apiClient.post('/trading/stop', null, {
-        params: withAccount(accountId),
-      });
+  stop: async (accountId: string) => {
+      await apiClient.post(`/accounts/${accountId}/trading/stop`);
   },
-  setStrategy: async (strategyName: string, accountId?: string) => {
-      const { data } = await apiClient.put('/trading/strategy', { strategy_name: strategyName }, {
-        params: withAccount(accountId),
-      });
+  setStrategy: async (strategyName: string, accountId: string) => {
+      const { data } = await apiClient.put(`/accounts/${accountId}/trading/strategy`, { strategy_name: strategyName });
       return data;
   }
 };
@@ -241,16 +233,16 @@ export const backtestApi = {
 };
 
 export const logApi = {
-    getLogs: async (limit: number = 100, offset: number = 0) => {
-        const { data } = await apiClient.get<LogEntry[]>('/logs/', { params: { limit, offset } });
+    getLogs: async (accountId: string, limit: number = 100, offset: number = 0) => {
+        const { data } = await apiClient.get<LogEntry[]>(`/accounts/${accountId}/logs/system`, { params: { limit, offset } });
         return data;
     },
-    getTrades: async (limit: number = 100, symbol?: string, offset: number = 0) => {
-        const { data } = await apiClient.get<any[]>('/logs/trades', { params: { limit, symbol, offset } });
+    getTrades: async (accountId: string, limit: number = 100, symbol?: string, offset: number = 0) => {
+        const { data } = await apiClient.get<any[]>(`/accounts/${accountId}/logs/trades`, { params: { limit, symbol, offset } });
         return data;
     },
-    getSignals: async (limit: number = 100, symbol?: string, offset: number = 0) => {
-        const { data } = await apiClient.get<any[]>('/logs/signals', { params: { limit, symbol, offset } });
+    getSignals: async (accountId: string, limit: number = 100, symbol?: string, offset: number = 0) => {
+        const { data } = await apiClient.get<any[]>(`/accounts/${accountId}/logs/signals`, { params: { limit, symbol, offset } });
         return data;
     }
 };

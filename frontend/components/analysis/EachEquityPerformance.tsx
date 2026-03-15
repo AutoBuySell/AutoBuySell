@@ -8,7 +8,7 @@ import {
     LineChart, Line, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer 
 } from 'recharts';
 
-export default function EachEquityPerformance() {
+export default function EachEquityPerformance({ accountId }: { accountId?: string }) {
     const [symbols, setSymbols] = useState<string[]>([]);
     const [selectedSymbol, setSelectedSymbol] = useState<string>('');
     const [period, setPeriod] = useState('1M');
@@ -18,7 +18,7 @@ export default function EachEquityPerformance() {
 
     useEffect(() => {
         loadSymbols();
-    }, []);
+    }, [accountId]);
 
     useEffect(() => {
         if (selectedSymbol) {
@@ -30,7 +30,7 @@ export default function EachEquityPerformance() {
         try {
             const [watchlistSymbols, positions] = await Promise.all([
                 dataApi.getSymbols(true),
-                tradingApi.getPositions(),
+                accountId ? tradingApi.getPositions(accountId) : Promise.resolve([]),
             ]);
             const watchlistTickers = watchlistSymbols.map((s: any) => s.ticker);
             const positionTickers = (positions || []).map((p: any) => p.symbol).filter(Boolean);

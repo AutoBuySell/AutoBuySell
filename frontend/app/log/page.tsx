@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
-import { logApi, type LogEntry } from '@/lib/api';
+import { accountsApi, logApi, type BrokerAccount, type LogEntry } from '@/lib/api';
 
 type LogTab = 'trades' | 'signals' | 'system';
 
@@ -36,30 +36,48 @@ export default function LogPage() {
     const [trades, setTrades] = useState<TradeLog[]>([]);
     const [signals, setSignals] = useState<SignalLog[]>([]);
     const [systemLogs, setSystemLogs] = useState<SystemLog[]>([]);
+    const [accounts, setAccounts] = useState<BrokerAccount[]>([]);
+    const [selectedAccountId, setSelectedAccountId] = useState('');
     const [filter, setFilter] = useState('');
     const [page, setPage] = useState(0);
     const [pageSize] = useState(100);
 
     useEffect(() => {
         setPage(0);
-    }, [activeTab, filter]);
+    }, [activeTab, filter, selectedAccountId]);
+
+    useEffect(() => {
+        const loadAccounts = async () => {
+            try {
+                const data = await accountsApi.list(true);
+                setAccounts(data);
+                if (!selectedAccountId && data.length > 0) {
+                    setSelectedAccountId(data[0].id);
+                }
+            } catch (e) {
+                console.error('Failed to load accounts', e);
+            }
+        };
+        loadAccounts();
+    }, []);
 
     useEffect(() => {
         loadData();
         // No auto-polling - use Refresh button
-    }, [activeTab, page]);
+    }, [activeTab, page, selectedAccountId]);
 
     const loadData = async () => {
         try {
+            if (!selectedAccountId) return;
             const offset = page * pageSize;
             if (activeTab === 'trades') {
-                const data = await logApi.getTrades(pageSize, filter || undefined, offset);
+                const data = await logApi.getTrades(selectedAccountId, pageSize, filter || undefined, offset);
                 setTrades(data);
             } else if (activeTab === 'signals') {
-                const data = await logApi.getSignals(pageSize, filter || undefined, offset);
+                const data = await logApi.getSignals(selectedAccountId, pageSize, filter || undefined, offset);
                 setSignals(data);
             } else {
-                const data = await logApi.getLogs(pageSize, offset);
+                const data = await logApi.getLogs(selectedAccountId, pageSize, offset);
                 setSystemLogs(data);
             }
         } catch (e) {
@@ -87,6 +105,23 @@ export default function LogPage() {
                     </button>
                 ))}
             </div>
+
+            <Card>
+                <CardContent className="py-3">
+                    <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                        <div className="text-sm font-medium">Account Scope</div>
+                        <select
+                            value={selectedAccountId}
+                            onChange={(e) => setSelectedAccountId(e.target.value)}
+                            className="w-full md:w-[420px] px-2 py-1 border rounded text-sm bg-background text-foreground"
+                        >
+                            {accounts.map((a) => (
+                                <option key={a.id} value={a.id}>{a.name} ({a.broker_type})</option>
+                            ))}
+                        </select>
+                    </div>
+                </CardContent>
+            </Card>
 
             {/* Filter */}
             <div className="flex flex-wrap gap-2 items-center">
