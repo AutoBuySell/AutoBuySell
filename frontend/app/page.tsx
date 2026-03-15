@@ -28,7 +28,7 @@ export default function Home() {
 
         setStatus(statusData);
 
-        const effectiveAccountId = accountId || selectedAccountId || accountsData?.[0]?.id;
+        const effectiveAccountId = accountId || selectedAccountId;
 
         if (!effectiveAccountId) {
           setAccount(null);
