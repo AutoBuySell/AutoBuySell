@@ -2,6 +2,7 @@ old/
 .env
 .env.*
 !.env.example
+broker_accounts.json
 .vscode/
 
 # Python
