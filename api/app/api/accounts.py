@@ -152,6 +152,18 @@ async def migrate_account_trades(
     try:
         svc = MigrationService()
         r = await svc.migrate_account_trades(db=db, account_id=account_id, broker=broker)
+
+        # Fallback: if already migrated, run incremental sync once for this account.
+        if r.skipped and r.skip_reason == "already_migrated":
+            try:
+                coordinator = request.app.state.trading_service
+                worker = coordinator.workers.get(account_id)
+                if worker:
+                    await worker.sync_trades()
+            except Exception as sync_err:
+                # Keep migration response successful; sync fallback is best-effort.
+                print(f"sync_trades fallback failed for account {account_id}: {sync_err}")
+
         return MigrationResponse(**r.__dict__)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Migration failed: {e}")

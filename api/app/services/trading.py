@@ -105,20 +105,9 @@ class TradingCoordinator:
             replace_existing=True,
         )
 
-    def _ensure_sync_jobs_for_all_accounts(self):
-        for aid, worker in self.workers.items():
-            self.scheduler.add_job(
-                worker.sync_trades,
-                IntervalTrigger(hours=1),
-                id=f"sync_trades:{aid}",
-                replace_existing=True,
-            )
-
     async def restore_state(self):
         """Restore all workers' state from DB on startup."""
-        # Sync-trades must run regardless of trading start/stop state.
         self._ensure_scheduler_base_jobs()
-        self._ensure_sync_jobs_for_all_accounts()
 
         for account_id, worker in self.workers.items():
             should_run = await worker.load_state()
@@ -129,13 +118,11 @@ class TradingCoordinator:
     async def start(self, account_id: Optional[UUID] = None, persist: bool = True):
         """Start trading for one or all accounts."""
         self._ensure_scheduler_base_jobs()
-        self._ensure_sync_jobs_for_all_accounts()
 
         targets = {account_id: self.workers[account_id]} if account_id else self.workers
 
         for aid, worker in targets.items():
             cycle_job_id = f"trading_cycle:{aid}"
-            sync_job_id = f"sync_trades:{aid}"
 
             if self.scheduler.get_job(cycle_job_id):
                 logger.info(f"Worker '{worker.account_name}' already running")
@@ -147,13 +134,6 @@ class TradingCoordinator:
                 id=cycle_job_id,
                 replace_existing=True,
             )
-            self.scheduler.add_job(
-                worker.sync_trades,
-                IntervalTrigger(hours=1),
-                id=sync_job_id,
-                replace_existing=True,
-            )
-
             if persist:
                 await worker.persist_running(True)
 
