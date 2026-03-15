@@ -5,13 +5,14 @@ from __future__ import annotations
 from typing import List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.domain.models import BrokerAccount
+from app.services.migration import MigrationService
 
 router = APIRouter()
 
@@ -39,6 +40,17 @@ class AccountUpdateRequest(BaseModel):
     credentials: Optional[dict] = None
     config: Optional[dict] = None
     is_active: Optional[bool] = None
+
+
+class MigrationResponse(BaseModel):
+    account_id: UUID
+    first_deploy: bool
+    fills_fetched: int
+    trades_inserted: int
+    trades_updated: int
+    orders_inserted: int
+    orders_updated: int
+    completed_at: str
 
 
 @router.get("/", response_model=List[AccountResponse])
@@ -107,6 +119,34 @@ async def update_account(
     await db.commit()
     await db.refresh(account)
     return account
+
+
+@router.post("/{account_id}/migrate-trades", response_model=MigrationResponse)
+async def migrate_account_trades(
+    account_id: UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Import broker trade fills into local orders/trades for this account."""
+    result = await db.execute(
+        select(BrokerAccount).where(BrokerAccount.id == account_id)
+    )
+    account = result.scalar_one_or_none()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    broker_manager = request.app.state.broker_manager
+    try:
+        broker = broker_manager.get(account_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Broker instance not available for this account")
+
+    try:
+        svc = MigrationService()
+        r = await svc.migrate_account_trades(db=db, account_id=account_id, broker=broker)
+        return MigrationResponse(**r.__dict__)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Migration failed: {e}")
 
 
 @router.delete("/{account_id}")
