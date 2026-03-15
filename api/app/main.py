@@ -78,6 +78,11 @@ async def _ensure_schema_compat():
             text("ALTER TABLE system_state ALTER COLUMN key TYPE VARCHAR(200)")
         )
 
+        # Older DBs may miss newly introduced columns used by current ORM model.
+        await conn.execute(
+            text("ALTER TABLE orders ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(200)")
+        )
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
