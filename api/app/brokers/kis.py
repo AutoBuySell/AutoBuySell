@@ -694,7 +694,16 @@ class KISBroker(BrokerAdapter):
                 continue
             ord_no = str(row.get("odno", "") or "")
             ccld_no = str(row.get("ovrs_ccld_no", "") or "")
-            sym = str(row.get("ovrs_pdno", "") or "")
+            sym = str(
+                row.get("ovrs_pdno")
+                or row.get("pdno")
+                or row.get("ovrs_pd_name")
+                or row.get("ovrs_item_name")
+                or row.get("pd_name")
+                or row.get("item_name")
+                or row.get("prdt_name")
+                or ""
+            )
 
             side_code = str(row.get("sll_buy_dvsn_cd", "") or "").strip()
             side_name = str(row.get("sll_buy_dvsn_name", "") or "").lower()

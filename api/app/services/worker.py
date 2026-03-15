@@ -282,11 +282,16 @@ class AccountWorker:
                     if order:
                         source = "system"
 
+                effective_symbol = fill.symbol or (order.symbol if order else "")
+                if not effective_symbol:
+                    # Keep record traceable even when broker omits symbol fields.
+                    effective_symbol = f"UNKNOWN-{(fill.order_id or fill.execution_id)[:12]}"
+
                 # 1) Write trade first
                 trade = Trade(
                     account_id=self.account_id,
                     order_id=order.id if order else None,
-                    symbol=fill.symbol,
+                    symbol=effective_symbol,
                     side=fill.side,
                     qty=fill.qty,
                     price=fill.price,
@@ -305,7 +310,7 @@ class AccountWorker:
                         account_id=self.account_id,
                         client_order_id=f"external-sync:{self.account_id}:{fill.execution_id}"[:100],
                         broker_order_id=fill.order_id,
-                        symbol=fill.symbol,
+                        symbol=effective_symbol,
                         side=fill.side,
                         type="market",
                         qty=float(fill.qty),
