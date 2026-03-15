@@ -22,11 +22,11 @@ export default function Home() {
   const fetchData = async (accountId?: string) => {
       try {
         const [accountsData, statusData] = await Promise.all([
-          accountsApi.list(),
+          accountsApi.list(true),
           tradingApi.getStatus(),
         ]);
 
-        setAccounts(accountsData);
+        setAccounts(accountsData || []);
         setStatus(statusData);
 
         const effectiveAccountId = accountId || selectedAccountId || statusData?.accounts?.[0]?.account_id;
