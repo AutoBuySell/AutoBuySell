@@ -251,7 +251,8 @@ class AccountWorker:
             if state:
                 trade_sync_after = datetime.fromisoformat(state.value)
 
-            fills = await self.broker.get_trade_fills(limit=100)
+            # Broker adapters return fills across all symbols; use high limit per sync run.
+            fills = await self.broker.get_trade_fills(limit=2000)
             synced_count = 0
             external_count = 0
 
@@ -260,7 +261,10 @@ class AccountWorker:
                     continue
 
                 existing = await db.execute(
-                    select(Trade).where(Trade.execution_id == fill.execution_id)
+                    select(Trade).where(
+                        Trade.account_id == self.account_id,
+                        Trade.execution_id == fill.execution_id,
+                    )
                 )
                 if existing.scalar_one_or_none():
                     continue
@@ -269,30 +273,53 @@ class AccountWorker:
                 order = None
                 if fill.order_id:
                     order_result = await db.execute(
-                        select(Order).where(Order.broker_order_id == fill.order_id)
+                        select(Order).where(
+                            Order.account_id == self.account_id,
+                            Order.broker_order_id == fill.order_id,
+                        )
                     )
                     order = order_result.scalar_one_or_none()
                     if order:
                         source = "system"
-                    else:
-                        external_count += 1
-                else:
-                    external_count += 1
 
-                db.add(
-                    Trade(
+                # 1) Write trade first
+                trade = Trade(
+                    account_id=self.account_id,
+                    order_id=order.id if order else None,
+                    symbol=fill.symbol,
+                    side=fill.side,
+                    qty=fill.qty,
+                    price=fill.price,
+                    commission=fill.commission,
+                    execution_id=fill.execution_id,
+                    source=source,
+                    created_at=fill.executed_at,
+                )
+                db.add(trade)
+                await db.flush()
+
+                # 2) Then ensure corresponding order exists for external fills
+                if not order:
+                    external_count += 1
+                    order = Order(
                         account_id=self.account_id,
-                        order_id=order.id if order else None,
+                        client_order_id=f"external-sync:{self.account_id}:{fill.execution_id}"[:100],
+                        broker_order_id=fill.order_id,
                         symbol=fill.symbol,
                         side=fill.side,
-                        qty=fill.qty,
-                        price=fill.price,
-                        commission=fill.commission,
-                        execution_id=fill.execution_id,
-                        source=source,
+                        type="market",
+                        qty=float(fill.qty),
+                        limit_price=None,
+                        status="filled",
+                        filled_qty=float(fill.qty),
+                        filled_avg_price=float(fill.price),
+                        strategy_name="external_sync",
                         created_at=fill.executed_at,
                     )
-                )
+                    db.add(order)
+                    await db.flush()
+                    trade.order_id = order.id
+
                 synced_count += 1
 
             await db.commit()

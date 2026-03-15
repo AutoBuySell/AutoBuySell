@@ -7,14 +7,14 @@ import {
     BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell 
 } from 'recharts';
 
-export default function NominalIncomes({ refreshTrigger }: { refreshTrigger?: number }) {
+export default function NominalIncomes({ accountId, refreshTrigger }: { accountId?: string, refreshTrigger?: number }) {
     const [data, setData] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
         loadData();
         // No auto-polling - parent controls refresh
-    }, [refreshTrigger]);
+    }, [refreshTrigger, accountId]);
 
     const getPaddedDomain = (values: number[], padRatio: number = 0.05): [number, number] => {
         if (!values.length) return [0, 1];
@@ -31,7 +31,11 @@ export default function NominalIncomes({ refreshTrigger }: { refreshTrigger?: nu
 
     const loadData = async () => {
         try {
-            const res = await statisticsApi.getUnrealizedIncome();
+            if (!accountId) {
+                setData([]);
+                return;
+            }
+            const res = await statisticsApi.getUnrealizedIncome(accountId);
             setData(res);
         } catch (e) {
             console.error("Failed to load unrealized income", e);

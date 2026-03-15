@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { logApi, type LogEntry } from '@/lib/api';
+import { useSelectedAccountId } from '@/lib/accountScope';
 
 type LogTab = 'trades' | 'signals' | 'system';
 
@@ -36,30 +37,32 @@ export default function LogPage() {
     const [trades, setTrades] = useState<TradeLog[]>([]);
     const [signals, setSignals] = useState<SignalLog[]>([]);
     const [systemLogs, setSystemLogs] = useState<SystemLog[]>([]);
+    const [selectedAccountId] = useSelectedAccountId();
     const [filter, setFilter] = useState('');
     const [page, setPage] = useState(0);
     const [pageSize] = useState(100);
 
     useEffect(() => {
         setPage(0);
-    }, [activeTab, filter]);
+    }, [activeTab, filter, selectedAccountId]);
 
     useEffect(() => {
         loadData();
         // No auto-polling - use Refresh button
-    }, [activeTab, page]);
+    }, [activeTab, page, selectedAccountId]);
 
     const loadData = async () => {
         try {
+            if (!selectedAccountId) return;
             const offset = page * pageSize;
             if (activeTab === 'trades') {
-                const data = await logApi.getTrades(pageSize, filter || undefined, offset);
+                const data = await logApi.getTrades(selectedAccountId, pageSize, filter || undefined, offset);
                 setTrades(data);
             } else if (activeTab === 'signals') {
-                const data = await logApi.getSignals(pageSize, filter || undefined, offset);
+                const data = await logApi.getSignals(selectedAccountId, pageSize, filter || undefined, offset);
                 setSignals(data);
             } else {
-                const data = await logApi.getLogs(pageSize, offset);
+                const data = await logApi.getLogs(selectedAccountId, pageSize, offset);
                 setSystemLogs(data);
             }
         } catch (e) {

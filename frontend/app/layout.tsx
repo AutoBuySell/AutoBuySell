@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
+import AccountScopeBar from "@/components/AccountScopeBar";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -26,6 +27,7 @@ export default function RootLayout({
               <a href="/log" className="hover:text-primary">Logs</a>
             </nav>
           </header>
+          <AccountScopeBar />
           <main className="flex-1 p-6">
             {children}
           </main>

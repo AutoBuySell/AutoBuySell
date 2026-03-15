@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { backtestApi, BacktestRun, BacktestResult, dataApi, SymbolInfo, tradingApi, PortfolioHistory, Position } from '@/lib/api';
+import { useSelectedAccountId } from '@/lib/accountScope';
 import { wsClient } from '@/lib/websocket';
 import { 
     ComposedChart, Line, AreaChart, Area, PieChart, Pie, Cell, 
@@ -55,6 +56,7 @@ export default function AnalysisPage() {
   const [history, setHistory] = useState<PortfolioHistory | null>(null);
   const [positions, setPositions] = useState<Position[]>([]);
   const [historyPeriod, setHistoryPeriod] = useState('1M');
+  const [selectedAccountId] = useSelectedAccountId();
 
   useEffect(() => {
     loadInitialData();
@@ -82,10 +84,10 @@ export default function AnalysisPage() {
   }, []);
 
   useEffect(() => {
-      if (activeTab === 'live') {
+      if (activeTab === 'live' && selectedAccountId) {
           loadLiveData();
       }
-  }, [activeTab, historyPeriod]);
+  }, [activeTab, historyPeriod, selectedAccountId]);
 
 
   useEffect(() => {
@@ -115,10 +117,10 @@ export default function AnalysisPage() {
     try {
         const strats = await backtestApi.getStrategies();
         setStrategies(strats.map(s => s.name));
-        
+
         const syms = await dataApi.getSymbols();
         setSymbols(syms);
-        
+
         loadRuns();
     } catch (e) {
         console.error("Failed to load init data", e);
@@ -134,10 +136,11 @@ export default function AnalysisPage() {
 
   const loadLiveData = async () => {
       try {
-          const hist = await tradingApi.getHistory(historyPeriod, '1D');
+          if (!selectedAccountId) return;
+          const hist = await tradingApi.getHistory(historyPeriod, '1D', selectedAccountId);
           setHistory(hist);
-          
-          const pos = await tradingApi.getPositions();
+
+          const pos = await tradingApi.getPositions(selectedAccountId);
           setPositions(pos);
       } catch (e) {
           console.error("Failed to load live data", e);
@@ -816,12 +819,12 @@ export default function AnalysisPage() {
                   </Card>
     
                   {/* Nominal Incomes Bar Chart */}
-                  <NominalIncomes refreshTrigger={refreshTrigger} />
+                  <NominalIncomes accountId={selectedAccountId} refreshTrigger={refreshTrigger} />
               </div>
 
               {/* Middle Row: Each Equity Performance (Full Width) */}
               <div className="grid grid-cols-1 gap-6">
-                   <EachEquityPerformance />
+                   <EachEquityPerformance accountId={selectedAccountId} />
               </div>
 
               {/* Portfolio Allocation Row */}
@@ -898,7 +901,7 @@ export default function AnalysisPage() {
 
               {/* Bottom Row: Transactions */}
               <div className="grid grid-cols-1 gap-6">
-                  <Transactions limit={20} refreshTrigger={refreshTrigger} />
+                  <Transactions accountId={selectedAccountId} limit={20} refreshTrigger={refreshTrigger} />
               </div>
           </div>
       )}

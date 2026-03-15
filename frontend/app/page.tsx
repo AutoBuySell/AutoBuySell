@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
-import { tradingApi, accountsApi, AccountInfo, Position, BrokerAccount } from "@/lib/api";
+import { tradingApi, accountsApi, AccountInfo, Position } from "@/lib/api";
+import { useSelectedAccountId } from "@/lib/accountScope";
 import { wsClient } from "@/lib/websocket";
 import SymbolManager from "@/components/SymbolManager";
 import SettingsPanel from "@/components/SettingsPanel";
@@ -14,8 +15,7 @@ export default function Home() {
   const [account, setAccount] = useState<AccountInfo | null>(null);
   const [positions, setPositions] = useState<Position[]>([]);
   const [status, setStatus] = useState<any>(null);
-  const [accounts, setAccounts] = useState<BrokerAccount[]>([]);
-  const [selectedAccountId, setSelectedAccountId] = useState<string | undefined>(undefined);
+  const [selectedAccountId] = useSelectedAccountId();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -23,15 +23,18 @@ export default function Home() {
       try {
         const [accountsData, statusData] = await Promise.all([
           accountsApi.list(true),
-          tradingApi.getStatus(),
+          tradingApi.getGlobalStatus(),
         ]);
 
-        setAccounts(accountsData || []);
         setStatus(statusData);
 
-        const effectiveAccountId = accountId || selectedAccountId || statusData?.accounts?.[0]?.account_id;
-        if (effectiveAccountId && !selectedAccountId) {
-          setSelectedAccountId(effectiveAccountId);
+        const effectiveAccountId = accountId || selectedAccountId || accountsData?.[0]?.id;
+
+        if (!effectiveAccountId) {
+          setAccount(null);
+          setPositions([]);
+          setError('No active account available');
+          return;
         }
 
         try {
@@ -90,26 +93,6 @@ export default function Home() {
           </button>
         ))}
       </div>
-
-      {/* Account selector */}
-      <Card>
-        <CardContent className="py-3">
-          <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-            <div className="text-sm font-medium">Trading Account</div>
-            <select
-              value={selectedAccountId || ''}
-              onChange={(e) => setSelectedAccountId(e.target.value || undefined)}
-              className="w-full md:w-[420px] px-2 py-1 border rounded text-sm bg-background text-foreground"
-            >
-              {accounts.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name} ({a.broker_type})
-                </option>
-              ))}
-            </select>
-          </div>
-        </CardContent>
-      </Card>
 
       {/* Current account banner (always visible) */}
       {(() => {
@@ -252,6 +235,7 @@ function SystemStatusCard({ accountId }: { accountId?: string }) {
 
     const refreshStatus = async () => {
         try {
+            if (!accountId) return;
             const data = await tradingApi.getStatus(accountId);
             setStatus(data);
         } catch (e) { console.error(e); }
@@ -260,6 +244,7 @@ function SystemStatusCard({ accountId }: { accountId?: string }) {
     const toggleTrading = async () => {
         setLoading(true);
         try {
+            if (!accountId) return;
             if (status?.is_running) {
                 await tradingApi.stop(accountId);
             } else {
@@ -276,6 +261,7 @@ function SystemStatusCard({ accountId }: { accountId?: string }) {
     const handleStrategyChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
         const newStrategy = e.target.value;
         try {
+            if (!accountId) return;
             await tradingApi.setStrategy(newStrategy, accountId);
             await refreshStatus();
         } catch (err) {
