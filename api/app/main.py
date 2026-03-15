@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app.core.database import engine, Base, AsyncSessionLocal
 from app.core.config import settings
@@ -70,11 +70,23 @@ async def _load_active_accounts() -> list[BrokerAccount]:
         return list(result.scalars().all())
 
 
+async def _ensure_schema_compat():
+    """Best-effort runtime schema compatibility patches for upgraded instances."""
+    async with engine.begin() as conn:
+        # Multi-account state keys include UUID prefixes and can exceed 50 chars.
+        await conn.execute(
+            text("ALTER TABLE system_state ALTER COLUMN key TYPE VARCHAR(200)")
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup: Create tables
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+    # Apply compatibility DDL for older DBs
+    await _ensure_schema_compat()
 
     # Ensure accounts from env exist in DB
     await _ensure_accounts_in_db()

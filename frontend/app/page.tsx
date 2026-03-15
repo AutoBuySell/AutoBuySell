@@ -34,15 +34,25 @@ export default function Home() {
           setSelectedAccountId(effectiveAccountId);
         }
 
-        const [accData, posData] = await Promise.all([
-          tradingApi.getAccount(effectiveAccountId),
-          tradingApi.getPositions(effectiveAccountId),
-        ]);
-        setAccount(accData);
-        setPositions(posData);
-      } catch (err) {
-        console.error("Failed to fetch data", err);
-        setError("Failed to connect to Trading API. Check console.");
+        try {
+          const [accData, posData] = await Promise.all([
+            tradingApi.getAccount(effectiveAccountId),
+            tradingApi.getPositions(effectiveAccountId),
+          ]);
+          setAccount(accData);
+          setPositions(posData);
+          setError(null);
+        } catch (accountErr: any) {
+          const detail = accountErr?.response?.data?.detail || accountErr?.message || 'Unknown account API error';
+          console.error('Account-scoped fetch failed', accountErr);
+          setAccount(null);
+          setPositions([]);
+          setError(`Selected account API error: ${detail}`);
+        }
+      } catch (err: any) {
+        const detail = err?.response?.data?.detail || err?.message || 'Unknown error';
+        console.error("Failed to fetch dashboard data", err);
+        setError(`Failed to connect to Trading API: ${detail}`);
       } finally {
         setLoading(false);
       }
