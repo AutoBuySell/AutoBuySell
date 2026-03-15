@@ -26,7 +26,8 @@ export default function Home() {
           tradingApi.getStatus(),
         ]);
 
-        setAccounts(accountsData);
+        const activeAccounts = (accountsData || []).filter((a) => a.is_active);
+        setAccounts(activeAccounts);
         setStatus(statusData);
 
         const effectiveAccountId = accountId || selectedAccountId || statusData?.accounts?.[0]?.account_id;
