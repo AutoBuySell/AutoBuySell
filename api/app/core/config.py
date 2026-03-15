@@ -1,6 +1,7 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional, Literal, List
 import json
+from pathlib import Path
 
 
 class Settings(BaseSettings):
@@ -18,8 +19,9 @@ class Settings(BaseSettings):
     def DATABASE_URL(self) -> str:
         return f"postgresql+asyncpg://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
 
-    # Multi-account configuration (JSON array)
-    # If set, overrides single-account BROKER_MODE + individual credential env vars.
+    # Multi-account configuration
+    # Priority: BROKER_ACCOUNTS_FILE > BROKER_ACCOUNTS > legacy single-account env
+    BROKER_ACCOUNTS_FILE: Optional[str] = None  # path to JSON file
     BROKER_ACCOUNTS: Optional[str] = None  # JSON string
 
     # Legacy single-account (fallback when BROKER_ACCOUNTS is not set)
@@ -43,6 +45,13 @@ class Settings(BaseSettings):
 
     def get_broker_accounts_config(self) -> List[dict]:
         """Parse multi-account config. Falls back to single-account env vars."""
+        if self.BROKER_ACCOUNTS_FILE:
+            path = Path(self.BROKER_ACCOUNTS_FILE).expanduser()
+            if not path.is_absolute():
+                path = Path.cwd() / path
+            with path.open("r", encoding="utf-8") as f:
+                return json.load(f)
+
         if self.BROKER_ACCOUNTS:
             return json.loads(self.BROKER_ACCOUNTS)
 
