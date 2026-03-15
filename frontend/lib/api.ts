@@ -36,6 +36,14 @@ export interface AccountInfo {
   is_paper: boolean;
 }
 
+export interface BrokerAccount {
+  id: string;
+  name: string;
+  broker_type: string;
+  config: Record<string, any>;
+  is_active: boolean;
+}
+
 export interface Position {
   symbol: string;
   qty: number;
@@ -112,34 +120,57 @@ export interface LogEntry {
 
 // --- API Methods ---
 
+const withAccount = (accountId?: string) => (
+  accountId ? { account_id: accountId } : {}
+);
+
 export const tradingApi = {
-  getAccount: async () => {
-    const { data } = await apiClient.get<AccountInfo>('/trading/account');
-    return data;
-  },
-  getPositions: async () => {
-    const { data } = await apiClient.get<Position[]>('/trading/positions');
-    return data;
-  },
-  getHistory: async (period: string = '1M', timeframe: string = '1D') => {
-    const { data } = await apiClient.get<PortfolioHistory>('/trading/history', { 
-        params: { period, timeframe } 
+  getAccount: async (accountId?: string) => {
+    const { data } = await apiClient.get<AccountInfo>('/trading/account', {
+      params: withAccount(accountId),
     });
     return data;
   },
-  getStatus: async () => {
-      const { data } = await apiClient.get('/trading/status');
+  getPositions: async (accountId?: string) => {
+    const { data } = await apiClient.get<Position[]>('/trading/positions', {
+      params: withAccount(accountId),
+    });
+    return data;
+  },
+  getHistory: async (period: string = '1M', timeframe: string = '1D', accountId?: string) => {
+    const { data } = await apiClient.get<PortfolioHistory>('/trading/history', {
+        params: { period, timeframe, ...withAccount(accountId) }
+    });
+    return data;
+  },
+  getStatus: async (accountId?: string) => {
+      const { data } = await apiClient.get('/trading/status', {
+        params: withAccount(accountId),
+      });
       return data;
   },
-  start: async () => {
-      await apiClient.post('/trading/start');
+  start: async (accountId?: string) => {
+      await apiClient.post('/trading/start', null, {
+        params: withAccount(accountId),
+      });
   },
-  stop: async () => {
-      await apiClient.post('/trading/stop');
+  stop: async (accountId?: string) => {
+      await apiClient.post('/trading/stop', null, {
+        params: withAccount(accountId),
+      });
   },
-  setStrategy: async (strategyName: string) => {
-      const { data } = await apiClient.put('/trading/strategy', { strategy_name: strategyName });
+  setStrategy: async (strategyName: string, accountId?: string) => {
+      const { data } = await apiClient.put('/trading/strategy', { strategy_name: strategyName }, {
+        params: withAccount(accountId),
+      });
       return data;
+  }
+};
+
+export const accountsApi = {
+  list: async () => {
+    const { data } = await apiClient.get<BrokerAccount[]>('/accounts/');
+    return data;
   }
 };
 
