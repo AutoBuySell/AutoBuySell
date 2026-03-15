@@ -18,7 +18,6 @@ from app.brokers.base import (
     PortfolioHistory,
     TradeFill,
 )
-from app.core.config import settings
 
 
 @dataclass
@@ -34,23 +33,45 @@ class SimpleBar:
 class KISBroker(BrokerAdapter):
     """KIS Open API adapter (phase 1: US stock flow for parity with Alpaca setup)."""
 
-    def __init__(self):
-        self.base_url = settings.KIS_BASE_URL.rstrip("/")
-        self.app_key = settings.KIS_APP_KEY
-        self.app_secret = settings.KIS_APP_SECRET
-        self.cano = settings.KIS_ACCOUNT_CANO
-        self.acnt_prdt_cd = settings.KIS_ACCOUNT_ACNT_PRDT_CD
+    def __init__(
+        self,
+        app_key: Optional[str] = None,
+        app_secret: Optional[str] = None,
+        cano: Optional[str] = None,
+        acnt_prdt_cd: Optional[str] = None,
+        base_url: Optional[str] = None,
+        is_paper: Optional[bool] = None,
+        **config,
+    ):
+        # Support legacy: fall back to settings if not provided
+        if app_key is None:
+            from app.core.config import settings as _s
+
+            app_key = _s.KIS_APP_KEY
+            app_secret = _s.KIS_APP_SECRET
+            cano = _s.KIS_ACCOUNT_CANO
+            acnt_prdt_cd = _s.KIS_ACCOUNT_ACNT_PRDT_CD
+            base_url = _s.KIS_BASE_URL
+            is_paper = _s.KIS_IS_PAPER
+
+        self.base_url = (base_url or "https://openapi.koreainvestment.com:9443").rstrip(
+            "/"
+        )
+        self.app_key = app_key
+        self.app_secret = app_secret
+        self.cano = cano
+        self.acnt_prdt_cd = acnt_prdt_cd
+        self.is_paper = is_paper if is_paper is not None else True
 
         if not all([self.app_key, self.app_secret, self.cano, self.acnt_prdt_cd]):
             raise ValueError(
-                "KIS configuration missing. Set KIS_APP_KEY, KIS_APP_SECRET, "
-                "KIS_ACCOUNT_CANO, KIS_ACCOUNT_ACNT_PRDT_CD"
+                "KIS configuration missing. Set app_key, app_secret, cano, acnt_prdt_cd"
             )
 
         # Fixed policy: regular session only, with per-symbol exchange mapping (NASDAQ/NYSE)
-        self.us_exchange = "NASD"
-        self.us_price_excd = "NAS"
-        self.us_currency = settings.KIS_US_CURRENCY
+        self.us_exchange = config.get("us_exchange", "NASD")
+        self.us_price_excd = config.get("us_price_excd", "NAS")
+        self.us_currency = config.get("us_currency", "USD")
         self._nyse_symbols = {"HIMS", "NET", "NIO", "OKLO", "TDOC"}
 
         self._access_token: Optional[str] = None
@@ -65,7 +86,11 @@ class KISBroker(BrokerAdapter):
 
     async def _ensure_token(self) -> str:
         now = datetime.now(timezone.utc)
-        if self._access_token and self._token_expires_at and self._token_expires_at > now:
+        if (
+            self._access_token
+            and self._token_expires_at
+            and self._token_expires_at > now
+        ):
             return self._access_token
 
         url = f"{self.base_url}/oauth2/tokenP"
@@ -113,18 +138,25 @@ class KISBroker(BrokerAdapter):
         for i in range(attempts):
             async with self._request_lock:
                 if self._last_request_at is not None:
-                    elapsed = (datetime.now(timezone.utc) - self._last_request_at).total_seconds()
+                    elapsed = (
+                        datetime.now(timezone.utc) - self._last_request_at
+                    ).total_seconds()
                     if elapsed < self._min_request_interval_sec:
                         await asyncio.sleep(self._min_request_interval_sec - elapsed)
-                resp = await client.request(method, url, headers=headers, params=params, json=json)
+                resp = await client.request(
+                    method, url, headers=headers, params=params, json=json
+                )
                 self._last_request_at = datetime.now(timezone.utc)
 
             data = resp.json() if resp.text else {}
             last_resp, last_data = resp, data
 
             throttled = (
-                (isinstance(data, dict) and str(data.get("message", "")) in {"EGW00201", "EGW00133"})
-                or (isinstance(data, dict) and "초당 거래건수를 초과" in str(data.get("msg1", "")))
+                isinstance(data, dict)
+                and str(data.get("message", "")) in {"EGW00201", "EGW00133"}
+            ) or (
+                isinstance(data, dict)
+                and "초당 거래건수를 초과" in str(data.get("msg1", ""))
             )
             transient_5xx = resp.status_code >= 500
 
@@ -165,7 +197,7 @@ class KISBroker(BrokerAdapter):
         - inquire-psamount: orderable amount snapshot (symbol-based)
         """
         bal_url = f"{self.base_url}/uapi/overseas-stock/v1/trading/inquire-balance"
-        bal_headers = await self._headers("VTTS3012R" if settings.KIS_IS_PAPER else "TTTS3012R")
+        bal_headers = await self._headers("VTTS3012R" if self.is_paper else "TTTS3012R")
         bal_params = {
             "CANO": self.cano,
             "ACNT_PRDT_CD": self.acnt_prdt_cd,
@@ -175,8 +207,12 @@ class KISBroker(BrokerAdapter):
             "CTX_AREA_NK200": "",
         }
 
-        present_url = f"{self.base_url}/uapi/overseas-stock/v1/trading/inquire-present-balance"
-        present_headers = await self._headers("VTRP6504R" if settings.KIS_IS_PAPER else "CTRP6504R")
+        present_url = (
+            f"{self.base_url}/uapi/overseas-stock/v1/trading/inquire-present-balance"
+        )
+        present_headers = await self._headers(
+            "VTRP6504R" if self.is_paper else "CTRP6504R"
+        )
         present_params = {
             "CANO": self.cano,
             "ACNT_PRDT_CD": self.acnt_prdt_cd,
@@ -186,8 +222,12 @@ class KISBroker(BrokerAdapter):
             "INQR_DVSN_CD": "00",
         }
 
-        orderable_url = f"{self.base_url}/uapi/overseas-stock/v1/trading/inquire-psamount"
-        orderable_headers = await self._headers("VTTS3007R" if settings.KIS_IS_PAPER else "TTTS3007R")
+        orderable_url = (
+            f"{self.base_url}/uapi/overseas-stock/v1/trading/inquire-psamount"
+        )
+        orderable_headers = await self._headers(
+            "VTTS3007R" if self.is_paper else "TTTS3007R"
+        )
         # Symbol for probing orderable cash (safe large-cap default)
         probe_symbol = "AAPL"
         orderable_params = {
@@ -199,15 +239,38 @@ class KISBroker(BrokerAdapter):
         }
 
         async with httpx.AsyncClient(timeout=20.0) as client:
-            bal_resp, bal_data = await self._request_with_retry(client, "GET", bal_url, headers=bal_headers, params=bal_params, attempts=4)
+            bal_resp, bal_data = await self._request_with_retry(
+                client,
+                "GET",
+                bal_url,
+                headers=bal_headers,
+                params=bal_params,
+                attempts=4,
+            )
             if bal_resp.status_code >= 400:
-                raise RuntimeError(f"KIS account query failed: status={bal_resp.status_code}, body={bal_data}")
+                raise RuntimeError(
+                    f"KIS account query failed: status={bal_resp.status_code}, body={bal_data}"
+                )
 
-            present_resp, present_data = await self._request_with_retry(client, "GET", present_url, headers=present_headers, params=present_params, attempts=4)
+            present_resp, present_data = await self._request_with_retry(
+                client,
+                "GET",
+                present_url,
+                headers=present_headers,
+                params=present_params,
+                attempts=4,
+            )
             if present_resp.status_code >= 400:
                 present_data = {}
 
-            ord_resp, ord_data = await self._request_with_retry(client, "GET", orderable_url, headers=orderable_headers, params=orderable_params, attempts=3)
+            ord_resp, ord_data = await self._request_with_retry(
+                client,
+                "GET",
+                orderable_url,
+                headers=orderable_headers,
+                params=orderable_params,
+                attempts=3,
+            )
             if ord_resp.status_code >= 400:
                 ord_data = {}
 
@@ -243,12 +306,12 @@ class KISBroker(BrokerAdapter):
             cash=cash,
             portfolio_value=portfolio,
             buying_power=buying_power,
-            is_paper=settings.KIS_IS_PAPER,
+            is_paper=self.is_paper,
         )
 
     async def get_positions(self) -> List[BrokerPosition]:
         url = f"{self.base_url}/uapi/overseas-stock/v1/trading/inquire-balance"
-        headers = await self._headers("VTTS3012R" if settings.KIS_IS_PAPER else "TTTS3012R")
+        headers = await self._headers("VTTS3012R" if self.is_paper else "TTTS3012R")
         params = {
             "CANO": self.cano,
             "ACNT_PRDT_CD": self.acnt_prdt_cd,
@@ -259,9 +322,13 @@ class KISBroker(BrokerAdapter):
         }
 
         async with httpx.AsyncClient(timeout=15.0) as client:
-            resp, data = await self._request_with_retry(client, "GET", url, headers=headers, params=params, attempts=4)
+            resp, data = await self._request_with_retry(
+                client, "GET", url, headers=headers, params=params, attempts=4
+            )
             if resp.status_code >= 400:
-                raise RuntimeError(f"KIS positions query failed: status={resp.status_code}, body={data}")
+                raise RuntimeError(
+                    f"KIS positions query failed: status={resp.status_code}, body={data}"
+                )
 
         positions: List[BrokerPosition] = []
         for row in data.get("output1", []):
@@ -278,7 +345,9 @@ class KISBroker(BrokerAdapter):
                 except Exception:
                     cur_price = 0
 
-            market_value = float(row.get("frcr_evlu_amt2", qty * cur_price) or qty * cur_price)
+            market_value = float(
+                row.get("frcr_evlu_amt2", qty * cur_price) or qty * cur_price
+            )
             unrealized_pl = float(row.get("evlu_pfls_amt2", 0) or 0)
             base = qty * avg_price if avg_price > 0 else 0
             unrealized_plpc = (unrealized_pl / base) if base > 0 else 0.0
@@ -302,7 +371,7 @@ class KISBroker(BrokerAdapter):
         url = f"{self.base_url}/uapi/overseas-stock/v1/trading/order"
 
         is_buy = order.side.lower() == "buy"
-        if settings.KIS_IS_PAPER:
+        if self.is_paper:
             tr_id = "VTTT1002U" if is_buy else "VTTT1006U"
         else:
             tr_id = "TTTT1002U" if is_buy else "TTTT1006U"
@@ -313,7 +382,9 @@ class KISBroker(BrokerAdapter):
             # Use current price as synthetic limit for phase 1 compatibility.
             price = await self._fetch_us_price(order.symbol)
             if price <= 0:
-                raise RuntimeError(f"Failed to resolve current price for {order.symbol}")
+                raise RuntimeError(
+                    f"Failed to resolve current price for {order.symbol}"
+                )
 
         order_excg, _ = self._exchange_codes_for_symbol(order.symbol)
         payload = {
@@ -332,18 +403,23 @@ class KISBroker(BrokerAdapter):
         headers = await self._headers(tr_id)
 
         async with httpx.AsyncClient(timeout=15.0) as client:
-            resp, data = await self._request_with_retry(client, "POST", url, headers=headers, json=payload)
+            resp, data = await self._request_with_retry(
+                client, "POST", url, headers=headers, json=payload
+            )
 
             if resp.status_code >= 400:
-                raise RuntimeError(f"KIS order failed: status={resp.status_code}, body={data}")
+                raise RuntimeError(
+                    f"KIS order failed: status={resp.status_code}, body={data}"
+                )
 
             rt_cd = str(data.get("rt_cd", "")) if isinstance(data, dict) else ""
             if rt_cd and rt_cd != "0":
                 msg1 = str(data.get("msg1", "")) if isinstance(data, dict) else ""
                 if "장시작전" in msg1 or "장마감" in msg1 or "장운영" in msg1:
                     self._last_market_closed_reject_at = datetime.now(timezone.utc)
-                raise RuntimeError(f"KIS order rejected: rt_cd={rt_cd}, msg1={msg1}, body={data}")
-
+                raise RuntimeError(
+                    f"KIS order rejected: rt_cd={rt_cd}, msg1={msg1}, body={data}"
+                )
 
         output = data.get("output", {}) if isinstance(data, dict) else {}
         ord_no = str(output.get("ODNO", ""))
@@ -353,7 +429,9 @@ class KISBroker(BrokerAdapter):
         if rt_cd and rt_cd != "0":
             if "장시작전" in msg1 or "장마감" in msg1 or "장운영" in msg1:
                 self._last_market_closed_reject_at = datetime.now(timezone.utc)
-            raise RuntimeError(f"KIS order rejected: rt_cd={rt_cd}, msg1={msg1}, body={data}")
+            raise RuntimeError(
+                f"KIS order rejected: rt_cd={rt_cd}, msg1={msg1}, body={data}"
+            )
 
         return OrderResult(
             client_order_id=ord_no or f"kis-{datetime.now().timestamp()}",
@@ -365,7 +443,7 @@ class KISBroker(BrokerAdapter):
 
     async def cancel_order(self, order_id: str) -> bool:
         url = f"{self.base_url}/uapi/overseas-stock/v1/trading/order-rvsecncl"
-        tr_id = "VTTT1004U" if settings.KIS_IS_PAPER else "TTTT1004U"
+        tr_id = "VTTT1004U" if self.is_paper else "TTTT1004U"
         headers = await self._headers(tr_id)
         payload = {
             "CANO": self.cano,
@@ -378,7 +456,9 @@ class KISBroker(BrokerAdapter):
             "ORD_SVR_DVSN_CD": "0",
         }
         async with httpx.AsyncClient(timeout=15.0) as client:
-            resp, data = await self._request_with_retry(client, "POST", url, headers=headers, json=payload)
+            resp, data = await self._request_with_retry(
+                client, "POST", url, headers=headers, json=payload
+            )
         if resp.status_code >= 400:
             return False
         return str((data or {}).get("rt_cd", "1")) == "0"
@@ -407,7 +487,9 @@ class KISBroker(BrokerAdapter):
 
         return True
 
-    async def get_historicals(self, symbol: str, timeframe: str, limit: int) -> List[Any]:
+    async def get_historicals(
+        self, symbol: str, timeframe: str, limit: int
+    ) -> List[Any]:
         tf = timeframe.lower()
         _, price_excd = self._exchange_codes_for_symbol(symbol)
 
@@ -426,7 +508,9 @@ class KISBroker(BrokerAdapter):
             }
 
             async with httpx.AsyncClient(timeout=20.0) as client:
-                resp, data = await self._request_with_retry(client, "GET", url, headers=headers, params=params)
+                resp, data = await self._request_with_retry(
+                    client, "GET", url, headers=headers, params=params
+                )
                 if resp.status_code >= 400:
                     return []
 
@@ -452,11 +536,16 @@ class KISBroker(BrokerAdapter):
 
         # Intraday minute candles (supports 1m/5m/15m/30m/1h)
         minute_map = {
-            "1min": "1", "1m": "1",
-            "5min": "5", "5m": "5",
-            "15min": "15", "15m": "15",
-            "30min": "30", "30m": "30",
-            "1hour": "60", "1h": "60",
+            "1min": "1",
+            "1m": "1",
+            "5min": "5",
+            "5m": "5",
+            "15min": "15",
+            "15m": "15",
+            "30min": "30",
+            "30m": "30",
+            "1hour": "60",
+            "1h": "60",
         }
         nmin = minute_map.get(tf)
         if not nmin:
@@ -477,7 +566,9 @@ class KISBroker(BrokerAdapter):
         }
 
         async with httpx.AsyncClient(timeout=20.0) as client:
-            resp, data = await self._request_with_retry(client, "GET", url, headers=headers, params=params)
+            resp, data = await self._request_with_retry(
+                client, "GET", url, headers=headers, params=params
+            )
             if resp.status_code >= 400:
                 return []
 
@@ -491,7 +582,9 @@ class KISBroker(BrokerAdapter):
             hm = row.get("khms") or row.get("xhms")
             if not dt or not hm:
                 continue
-            ts_local = datetime.strptime(f"{dt}{hm}", "%Y%m%d%H%M%S").replace(tzinfo=kst)
+            ts_local = datetime.strptime(f"{dt}{hm}", "%Y%m%d%H%M%S").replace(
+                tzinfo=kst
+            )
             ts = ts_local.astimezone(timezone.utc)
             bars.append(
                 SimpleBar(
@@ -507,7 +600,9 @@ class KISBroker(BrokerAdapter):
         bars.reverse()
         return bars
 
-    async def get_portfolio_history(self, period: str = "1M", timeframe: str = "1D") -> PortfolioHistory:
+    async def get_portfolio_history(
+        self, period: str = "1M", timeframe: str = "1D"
+    ) -> PortfolioHistory:
         """
         KIS does not expose Alpaca-style equity curve in one normalized endpoint.
         Phase-1 compatibility: return a synthetic flat curve based on current portfolio value
@@ -561,7 +656,7 @@ class KISBroker(BrokerAdapter):
 
     async def get_trade_fills(self, limit: int = 100) -> List[TradeFill]:
         url = f"{self.base_url}/uapi/overseas-stock/v1/trading/inquire-ccnl"
-        tr_id = "VTTS3035R" if settings.KIS_IS_PAPER else "TTTS3035R"
+        tr_id = "VTTS3035R" if self.is_paper else "TTTS3035R"
         headers = await self._headers(tr_id)
 
         today = datetime.now()
@@ -585,7 +680,9 @@ class KISBroker(BrokerAdapter):
         }
 
         async with httpx.AsyncClient(timeout=20.0) as client:
-            resp, data = await self._request_with_retry(client, "GET", url, headers=headers, params=params)
+            resp, data = await self._request_with_retry(
+                client, "GET", url, headers=headers, params=params
+            )
             if resp.status_code >= 400:
                 return []
 
@@ -608,13 +705,17 @@ class KISBroker(BrokerAdapter):
             else:
                 side = "buy"
 
-            price = float(row.get("ft_ccld_unpr3", 0) or row.get("ft_ord_unpr3", 0) or 0)
+            price = float(
+                row.get("ft_ccld_unpr3", 0) or row.get("ft_ord_unpr3", 0) or 0
+            )
 
             # timestamp parse: KIS date/time fields are usually in Korea local time
             ord_dt = str(row.get("ord_dt", "") or end_dt)
             ord_tm = str(row.get("ord_tmd", "") or "000000").zfill(6)
             try:
-                executed_local = datetime.strptime(f"{ord_dt}{ord_tm}", "%Y%m%d%H%M%S").replace(tzinfo=ZoneInfo("Asia/Seoul"))
+                executed_local = datetime.strptime(
+                    f"{ord_dt}{ord_tm}", "%Y%m%d%H%M%S"
+                ).replace(tzinfo=ZoneInfo("Asia/Seoul"))
                 executed_at = executed_local.astimezone(timezone.utc)
             except Exception:
                 executed_at = datetime.now(timezone.utc)

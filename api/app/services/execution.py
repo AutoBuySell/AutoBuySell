@@ -1,115 +1,164 @@
-from typing import List
-import logging
-from fastapi.encoders import jsonable_encoder
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-from app.strategies.base import StrategySignal, SignalType
-from app.brokers.base import BrokerAdapter, OrderRequest, AccountInfo
-from app.services.risk import RiskManager, RiskException
-from app.domain.models import Order, SignalLog, LogEntry, SystemState
+from __future__ import annotations
+
 from datetime import datetime, timezone
-import uuid
+from typing import Optional
+from uuid import UUID
+import logging
+
+from fastapi.encoders import jsonable_encoder
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.brokers.base import BrokerAdapter, OrderRequest
+from app.domain.models import Order, SignalLog, LogEntry, SystemState
+from app.services.risk import RiskManager, RiskException
+from app.strategies.base import StrategySignal, SignalType
 from app.api.ws import manager
 
 logger = logging.getLogger(__name__)
 
+
+def _state_key(account_id: Optional[UUID], key: str) -> str:
+    if account_id:
+        return f"{account_id}:{key}"
+    return key
+
+
 class ExecutionService:
-    """
-    Orchestrates the flow: Signal -> Risk Check -> Broker Order -> DB Record.
-    """
+    """Orchestrates: Signal -> Idempotency Check -> Risk Check -> Broker Order -> DB Record."""
 
     def __init__(self, broker: BrokerAdapter, risk_manager: RiskManager):
         self.broker = broker
         self.risk = risk_manager
 
-    async def process_signal(self, db: AsyncSession, signal: StrategySignal) -> bool:
-        """Process a single signal (qty already calculated). Returns True if order was submitted."""
+    async def process_signal(
+        self,
+        db: AsyncSession,
+        signal: StrategySignal,
+        account_id: Optional[UUID] = None,
+    ) -> bool:
+        """Process a single signal. Returns True if order was submitted."""
         if signal.type == SignalType.HOLD:
             return False
-        
-        # Log the Signal first
-        await self._log_signal(db, signal)
-        
-        qty = signal.qty  # Already calculated by strategy
-        
+
+        await self._log_signal(db, signal, account_id)
+
+        qty = signal.qty
         if qty <= 0:
             await db.commit()
             return False
-        
-        side = 'buy' if signal.type == SignalType.BUY else 'sell'
+
+        side = "buy" if signal.type == SignalType.BUY else "sell"
         order_req = OrderRequest(
-            symbol=signal.symbol,
-            qty=qty,
-            side=side,
-            type='market'
+            symbol=signal.symbol, qty=qty, side=side, type="market"
         )
-        
-        # Fetch current price estimate (for risk check)
-        price_estimate = signal.metadata.get('current_price', 0.0)
-        
+
+        price_estimate = signal.metadata.get("current_price", 0.0)
         if price_estimate == 0.0:
-            logger.warning(f"No current_price in signal metadata for {signal.symbol}, skipping")
+            logger.warning(
+                f"No current_price in signal metadata for {signal.symbol}, skipping"
+            )
             await db.commit()
             return False
-        
+
+        # Idempotency check
+        bar_ts = self._resolve_bar_timestamp(signal)
+        idem_key = self._build_idempotency_key(
+            account_id, signal.symbol, side, bar_ts, signal.strategy_name
+        )
+        if idem_key:
+            existing = await db.execute(
+                select(Order).where(Order.idempotency_key == idem_key)
+            )
+            if existing.scalar_one_or_none():
+                logger.info(f"Duplicate signal skipped (idempotency): {idem_key}")
+                await db.commit()
+                return False
+
         submitted = False
         try:
-            # Get latest account info
             account = await self.broker.get_account_info()
-            
-            # Risk Validation
             await self.risk.validate_order(db, account, order_req, price_estimate)
-            
-            # Submit to Broker
+
             result = await self.broker.submit_order(order_req)
             submitted = True
-            
-            # Record Order in DB
+
             db_order = Order(
+                account_id=account_id,
                 client_order_id=result.client_order_id,
                 broker_order_id=result.broker_order_id,
+                idempotency_key=idem_key,
                 symbol=result.symbol,
                 side=order_req.side,
                 type=order_req.type,
                 qty=result.qty,
-                status=result.status
+                status=result.status,
             )
             db.add(db_order)
-            
-            # Log success
-            db.add(LogEntry(level="INFO", source="Execution", message=f"Order Placed: {result.client_order_id}"))
+            db.add(
+                LogEntry(
+                    level="INFO",
+                    source="Execution",
+                    message=f"Order Placed: {result.client_order_id}",
+                    context={"account_id": str(account_id)} if account_id else None,
+                )
+            )
 
             if signal.type == SignalType.BUY:
-                bar_ts = self._resolve_bar_timestamp(signal)
-                await self._set_last_buy_ts(db, signal.symbol, bar_ts)
-
+                await self._set_ts(
+                    db, account_id, f"last_buy_ts:{signal.symbol}", bar_ts
+                )
             if signal.type == SignalType.SELL:
-                bar_ts = self._resolve_bar_timestamp(signal)
-                await self._set_last_sell_ts(db, signal.symbol, bar_ts)
-            
-            # Broadcast via WebSocket
-            await manager.broadcast({
-                "type": "ORDER_FILLED",
-                "data": {
-                    "symbol": result.symbol,
-                    "side": order_req.side,
-                    "qty": result.qty,
-                    "price": 0.0,
-                    "status": result.status,
-                    "timestamp": str(datetime.now())
+                await self._set_ts(
+                    db, account_id, f"last_sell_ts:{signal.symbol}", bar_ts
+                )
+
+            await manager.broadcast(
+                {
+                    "type": "ORDER_FILLED",
+                    "data": {
+                        "account_id": str(account_id) if account_id else None,
+                        "symbol": result.symbol,
+                        "side": order_req.side,
+                        "qty": result.qty,
+                        "price": 0.0,
+                        "status": result.status,
+                        "timestamp": str(datetime.now()),
+                    },
                 }
-            })
-            
-        except RiskException as e:
-            # Handled in RiskManager log
+            )
+
+        except RiskException:
             pass
         except Exception as e:
-            db.add(LogEntry(level="ERROR", source="Execution", message=f"Failed to process signal: {str(e)}"))
+            db.add(
+                LogEntry(
+                    level="ERROR",
+                    source="Execution",
+                    message=f"Failed to process signal: {str(e)}",
+                    context={"account_id": str(account_id)} if account_id else None,
+                )
+            )
 
         await db.commit()
         return submitted
 
-    def _coerce_timestamp(self, value) -> datetime | None:
+    # ── Helpers ─────────────────────────────────────────────────────
+
+    @staticmethod
+    def _build_idempotency_key(
+        account_id: Optional[UUID],
+        symbol: str,
+        side: str,
+        bar_ts: datetime,
+        strategy_name: str,
+    ) -> Optional[str]:
+        if not bar_ts:
+            return None
+        acct = str(account_id) if account_id else "default"
+        return f"{acct}:{symbol}:{side}:{bar_ts.isoformat()}:{strategy_name}"
+
+    def _coerce_timestamp(self, value) -> Optional[datetime]:
         if isinstance(value, datetime):
             return value
         if isinstance(value, str):
@@ -127,34 +176,31 @@ class ExecutionService:
             bar_ts = bar_ts.replace(tzinfo=timezone.utc)
         return bar_ts
 
-    async def _set_last_buy_ts(self, db: AsyncSession, symbol: str, ts: datetime):
-        key = f"last_buy_ts:{symbol}"
+    async def _set_ts(
+        self, db: AsyncSession, account_id: Optional[UUID], key: str, ts: datetime
+    ):
+        scoped_key = _state_key(account_id, key)
         result = await db.execute(
-            select(SystemState).where(SystemState.key == key)
+            select(SystemState).where(SystemState.key == scoped_key)
         )
         state = result.scalar_one_or_none()
         if state:
             state.value = ts.isoformat()
         else:
-            db.add(SystemState(key=key, value=ts.isoformat()))
+            db.add(SystemState(key=scoped_key, value=ts.isoformat()))
 
-    async def _set_last_sell_ts(self, db: AsyncSession, symbol: str, ts: datetime):
-        key = f"last_sell_ts:{symbol}"
-        result = await db.execute(
-            select(SystemState).where(SystemState.key == key)
-        )
-        state = result.scalar_one_or_none()
-        if state:
-            state.value = ts.isoformat()
-        else:
-            db.add(SystemState(key=key, value=ts.isoformat()))
-
-    async def _log_signal(self, db: AsyncSession, signal: StrategySignal):
+    async def _log_signal(
+        self,
+        db: AsyncSession,
+        signal: StrategySignal,
+        account_id: Optional[UUID] = None,
+    ):
         log = SignalLog(
+            account_id=account_id,
             strategy_name=signal.strategy_name,
             symbol=signal.symbol,
             signal_type=signal.type.name,
             signal_strength=signal.confidence,
-            raw_data=jsonable_encoder(signal.metadata)
+            raw_data=jsonable_encoder(signal.metadata),
         )
         db.add(log)

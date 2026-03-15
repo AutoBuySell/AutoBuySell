@@ -5,6 +5,7 @@ import logging
 
 router = APIRouter()
 
+
 class ConnectionManager:
     def __init__(self):
         self.active_connections: List[WebSocket] = []
@@ -27,7 +28,9 @@ class ConnectionManager:
                 # If send fails, we might want to remove, but usually disconnect handles it
                 pass
 
+
 manager = ConnectionManager()
+
 
 @router.websocket("/stream")
 async def websocket_endpoint(websocket: WebSocket):
