@@ -168,8 +168,10 @@ export const tradingApi = {
 };
 
 export const accountsApi = {
-  list: async () => {
-    const { data } = await apiClient.get<BrokerAccount[]>('/accounts/');
+  list: async (activeOnly: boolean = false) => {
+    const { data } = await apiClient.get<BrokerAccount[]>('/accounts/', {
+      params: { active_only: activeOnly },
+    });
     return data;
   }
 };

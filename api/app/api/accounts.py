@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -42,9 +42,16 @@ class AccountUpdateRequest(BaseModel):
 
 
 @router.get("/", response_model=List[AccountResponse])
-async def list_accounts(db: AsyncSession = Depends(get_db)):
-    """List all broker accounts (credentials excluded)."""
-    result = await db.execute(select(BrokerAccount).order_by(BrokerAccount.name))
+async def list_accounts(
+    active_only: bool = Query(False, description="Return only active accounts"),
+    db: AsyncSession = Depends(get_db),
+):
+    """List broker accounts (credentials excluded)."""
+    query = select(BrokerAccount)
+    if active_only:
+        query = query.where(BrokerAccount.is_active == True)
+    query = query.order_by(BrokerAccount.name)
+    result = await db.execute(query)
     return result.scalars().all()
 
 
