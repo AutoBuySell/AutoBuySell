@@ -1,48 +1,87 @@
 import uuid
 from datetime import datetime, date
-from typing import Optional, Any
+from typing import Optional
 from sqlalchemy import (
-    String, Integer, Float, Boolean, DateTime, JSON, ForeignKey, 
-    Index, Text, UniqueConstraint
+    String,
+    Integer,
+    Float,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    Text,
+    UniqueConstraint,
 )
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 
 from app.core.database import Base
 
+
 # --- Core Abstract Base ---
 class TimeStampedBase(Base):
     __abstract__ = True
-    
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), onupdate=func.now(), server_default=func.now()
+    )
+
+
+# --- Broker Accounts ---
+
+
+class BrokerAccount(TimeStampedBase):
+    """Registered broker accounts for multi-account trading."""
+
+    __tablename__ = "broker_accounts"
+
+    name: Mapped[str] = mapped_column(String(100), unique=True)
+    broker_type: Mapped[str] = mapped_column(String(20))  # 'alpaca' | 'kis'
+    credentials: Mapped[dict] = mapped_column(JSONB, default=dict)
+    config: Mapped[dict] = mapped_column(JSONB, default=dict)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
 
 # --- Market Data ---
 
+
 class Symbol(TimeStampedBase):
     __tablename__ = "symbols"
-    
+
     ticker: Mapped[str] = mapped_column(String(20), unique=True, index=True)
     name: Mapped[Optional[str]] = mapped_column(String(200))
     sector: Mapped[Optional[str]] = mapped_column(String(100))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
+
 class Candle(Base):
     """
-    OHLCV Data. 
+    OHLCV Data.
     Intentionally NOT using UUID PK to optimize for composite (symbol, timeframe, timestamp).
     """
+
     __tablename__ = "candles"
     __table_args__ = (
-        Index("idx_candles_symbol_tf_ts", "symbol", "timeframe", "timestamp", unique=True),
+        Index(
+            "idx_candles_symbol_tf_ts", "symbol", "timeframe", "timestamp", unique=True
+        ),
     )
 
-    symbol: Mapped[str] = mapped_column(String(20), primary_key=True) # Denormalized for query speed
-    timeframe: Mapped[str] = mapped_column(String(10), primary_key=True) # '1m', '1d'
-    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
-    
+    symbol: Mapped[str] = mapped_column(
+        String(20), primary_key=True
+    )  # Denormalized for query speed
+    timeframe: Mapped[str] = mapped_column(String(10), primary_key=True)  # '1m', '1d'
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), primary_key=True
+    )
+
     open: Mapped[float] = mapped_column(Float)
     high: Mapped[float] = mapped_column(Float)
     low: Mapped[float] = mapped_column(Float)
@@ -52,14 +91,24 @@ class Candle(Base):
 
 class RuntimeCandle(Base):
     """Broker-runtime candles captured during live cycles (keeps broker source)."""
+
     __tablename__ = "candles_runtime"
     __table_args__ = (
-        Index("idx_runtime_candles_symbol_tf_ts_src", "symbol", "timeframe", "timestamp", "broker_source", unique=True),
+        Index(
+            "idx_runtime_candles_symbol_tf_ts_src",
+            "symbol",
+            "timeframe",
+            "timestamp",
+            "broker_source",
+            unique=True,
+        ),
     )
 
     symbol: Mapped[str] = mapped_column(String(20), primary_key=True)
     timeframe: Mapped[str] = mapped_column(String(10), primary_key=True)
-    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), primary_key=True
+    )
     broker_source: Mapped[str] = mapped_column(String(20), primary_key=True)
 
     open: Mapped[float] = mapped_column(Float)
@@ -68,6 +117,7 @@ class RuntimeCandle(Base):
     close: Mapped[float] = mapped_column(Float)
     volume: Mapped[float] = mapped_column(Float)
 
+
 class DataDownloadRecord(TimeStampedBase):
     """
     Tracks downloaded data ranges for each symbol/timeframe combination.
@@ -75,46 +125,71 @@ class DataDownloadRecord(TimeStampedBase):
     Multiple non-overlapping ranges can exist per symbol/timeframe.
     When a new download covers existing ranges, merge into single record.
     """
+
     __tablename__ = "data_download_records"
-    __table_args__ = (
-        Index("idx_download_records_symbol_tf", "symbol", "timeframe"),
-    )
-    
+    __table_args__ = (Index("idx_download_records_symbol_tf", "symbol", "timeframe"),)
+
     symbol: Mapped[str] = mapped_column(String(20), index=True)
     timeframe: Mapped[str] = mapped_column(String(10))
-    start_date: Mapped[date] = mapped_column(DateTime(timezone=False).with_variant(DateTime, "postgresql"))
-    end_date: Mapped[date] = mapped_column(DateTime(timezone=False).with_variant(DateTime, "postgresql"))
+    start_date: Mapped[date] = mapped_column(
+        DateTime(timezone=False).with_variant(DateTime, "postgresql")
+    )
+    end_date: Mapped[date] = mapped_column(
+        DateTime(timezone=False).with_variant(DateTime, "postgresql")
+    )
+
 
 # --- Configuration & Strategies ---
 
+
 class StrategyMeta(TimeStampedBase):
     """Available Strategy Definitions (Classes)"""
+
     __tablename__ = "strategies"
-    
+
     name: Mapped[str] = mapped_column(String(100), unique=True)
     description: Mapped[Optional[str]] = mapped_column(Text)
-    class_path: Mapped[str] = mapped_column(String(255)) # e.g. "app.strategies.sma.SMAStrategy"
+    class_path: Mapped[str] = mapped_column(
+        String(255)
+    )  # e.g. "app.strategies.sma.SMAStrategy"
+
 
 class StrategyParam(TimeStampedBase):
     """Versioned Parameters for Strategies"""
+
     __tablename__ = "strategy_params"
-    
+
     strategy_name: Mapped[str] = mapped_column(ForeignKey("strategies.name"))
     version: Mapped[int] = mapped_column(Integer, default=1)
-    symbol: Mapped[Optional[str]] = mapped_column(String(20), nullable=True) # Specific symbol override
-    params: Mapped[dict] = mapped_column(JSONB) # e.g. {"window": 20, "stop_loss": 0.05}
+    symbol: Mapped[Optional[str]] = mapped_column(
+        String(20), nullable=True
+    )  # Specific symbol override
+    params: Mapped[dict] = mapped_column(
+        JSONB
+    )  # e.g. {"window": 20, "stop_loss": 0.05}
     is_active: Mapped[bool] = mapped_column(Boolean, default=False)
-    
+
     __table_args__ = (
-        UniqueConstraint('strategy_name', 'symbol', 'version', name='uq_strategy_symbol_version'),
+        UniqueConstraint(
+            "strategy_name", "symbol", "version", name="uq_strategy_symbol_version"
+        ),
     )
+
 
 # --- Trading Operations ---
 
+
 class Position(TimeStampedBase):
     """Current Open Positions Snapshot"""
+
     __tablename__ = "positions"
-    
+    __table_args__ = (
+        UniqueConstraint("account_id", "symbol", name="uq_position_account_symbol"),
+    )
+
+    account_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("broker_accounts.id"), nullable=True, index=True
+    )
     symbol: Mapped[str] = mapped_column(String(20), index=True)
     qty: Mapped[float] = mapped_column(Float)
     avg_entry_price: Mapped[float] = mapped_column(Float)
@@ -122,38 +197,71 @@ class Position(TimeStampedBase):
     market_value: Mapped[float] = mapped_column(Float)
     unrealized_pl: Mapped[float] = mapped_column(Float)
     unrealized_plpc: Mapped[float] = mapped_column(Float)
-    side: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)  # 'long' or 'short'
+    side: Mapped[Optional[str]] = mapped_column(
+        String(10), nullable=True
+    )  # 'long' or 'short'
+
 
 class Order(TimeStampedBase):
     __tablename__ = "orders"
-    
+
+    account_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("broker_accounts.id"), nullable=True, index=True
+    )
     client_order_id: Mapped[str] = mapped_column(String(100), unique=True)
     broker_order_id: Mapped[Optional[str]] = mapped_column(String(100), index=True)
-    
+    idempotency_key: Mapped[Optional[str]] = mapped_column(
+        String(200), unique=True, nullable=True
+    )
+
     symbol: Mapped[str] = mapped_column(String(20), index=True)
-    side: Mapped[str] = mapped_column(String(10)) # buy, sell
-    type: Mapped[str] = mapped_column(String(20)) # market, limit
+    side: Mapped[str] = mapped_column(String(10))  # buy, sell
+    type: Mapped[str] = mapped_column(String(20))  # market, limit
     qty: Mapped[float] = mapped_column(Float)
     limit_price: Mapped[Optional[float]] = mapped_column(Float)
-    
-    status: Mapped[str] = mapped_column(String(32)) # new, filled, cancelled, rejected (enum-safe length)
+
+    status: Mapped[str] = mapped_column(
+        String(32)
+    )  # new, submitted, filled, cancelled, rejected
     filled_qty: Mapped[float] = mapped_column(Float, default=0.0)
     filled_avg_price: Mapped[Optional[float]] = mapped_column(Float)
-    
-    strategy_name: Mapped[Optional[str]] = mapped_column(String(100)) # for attribution
+
+    strategy_name: Mapped[Optional[str]] = mapped_column(String(100))  # for attribution
+
+    # Valid status transitions
+    _VALID_TRANSITIONS = {
+        "new": {"submitted", "rejected"},
+        "submitted": {"filled", "cancelled", "rejected"},
+    }
+
+    def transition_status(self, new_status: str) -> bool:
+        allowed = self._VALID_TRANSITIONS.get(self.status, set())
+        if new_status not in allowed:
+            return False
+        self.status = new_status
+        return True
+
 
 class Trade(TimeStampedBase):
     """Executed Trades (Fills)"""
+
     __tablename__ = "trades"
-    
-    order_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("orders.id"), nullable=True)
+
+    account_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("broker_accounts.id"), nullable=True, index=True
+    )
+    order_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("orders.id"), nullable=True
+    )
     symbol: Mapped[str] = mapped_column(String(20), index=True)
     side: Mapped[str] = mapped_column(String(10))
     qty: Mapped[float] = mapped_column(Float)
     price: Mapped[float] = mapped_column(Float)
     commission: Mapped[float] = mapped_column(Float, default=0.0)
-    execution_id: Mapped[Optional[str]] = mapped_column(String(100)) # Broker's execution ID
-    source: Mapped[str] = mapped_column(String(20), default='system')
+    execution_id: Mapped[Optional[str]] = mapped_column(
+        String(100)
+    )  # Broker's execution ID
+    source: Mapped[str] = mapped_column(String(20), default="system")
     # 'system' = Trade from system order
     # 'external' = Trade from external order (Alpaca web/app)
     # 'initial' = Virtual trade for initial position
@@ -161,59 +269,75 @@ class Trade(TimeStampedBase):
 
 # --- Logging (Split by type) ---
 
+
 class SignalLog(TimeStampedBase):
     __tablename__ = "log_signals"
-    
+
+    account_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("broker_accounts.id"), nullable=True, index=True
+    )
     strategy_name: Mapped[str] = mapped_column(String(100))
     symbol: Mapped[str] = mapped_column(String(20))
-    signal_type: Mapped[str] = mapped_column(String(20)) # BUY, SELL, HOLD
+    signal_type: Mapped[str] = mapped_column(String(20))  # BUY, SELL, HOLD
     signal_strength: Mapped[float] = mapped_column(Float, default=1.0)
-    raw_data: Mapped[Optional[dict]] = mapped_column(JSONB) # Context for the signal
+    raw_data: Mapped[Optional[dict]] = mapped_column(JSONB)  # Context for the signal
+
 
 class LogEntry(TimeStampedBase):
     """General System & Error Logs"""
+
     __tablename__ = "log_system"
-    
-    level: Mapped[str] = mapped_column(String(10), index=True) # INFO, ERROR, WARN
-    source: Mapped[str] = mapped_column(String(50)) # 'execution', 'broker', 'strategy'
+
+    level: Mapped[str] = mapped_column(String(10), index=True)  # INFO, ERROR, WARN
+    source: Mapped[str] = mapped_column(String(50))  # 'execution', 'broker', 'strategy'
     message: Mapped[str] = mapped_column(Text)
     context: Mapped[Optional[dict]] = mapped_column(JSONB)
 
+
 # --- Backtest ---
+
 
 class BacktestRun(TimeStampedBase):
     __tablename__ = "backtest_runs"
-    
+
     strategy_name: Mapped[str] = mapped_column(String(100))
-    symbol: Mapped[str] = mapped_column(String(100)) # CSV if multiple
+    symbol: Mapped[str] = mapped_column(String(100))  # CSV if multiple
     timeframe: Mapped[str] = mapped_column(String(10))
-    start_date: Mapped[datetime] = mapped_column(DateTime) # Using DateTime for flexibility
+    start_date: Mapped[datetime] = mapped_column(
+        DateTime
+    )  # Using DateTime for flexibility
     end_date: Mapped[datetime] = mapped_column(DateTime)
     initial_capital: Mapped[float] = mapped_column(Float)
     params: Mapped[dict] = mapped_column(JSONB)
-    status: Mapped[str] = mapped_column(String(20)) # RUNNING, COMPLETED, FAILED
+    status: Mapped[str] = mapped_column(String(20))  # RUNNING, COMPLETED, FAILED
     error_message: Mapped[Optional[str]] = mapped_column(Text)
+
 
 class BacktestResult(TimeStampedBase):
     __tablename__ = "backtest_results"
-    
+
     run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("backtest_runs.id"))
-    total_return: Mapped[float] = mapped_column(Float) # Percent
+    total_return: Mapped[float] = mapped_column(Float)  # Percent
     max_drawdown: Mapped[float] = mapped_column(Float)
     win_rate: Mapped[float] = mapped_column(Float)
     total_trades: Mapped[int] = mapped_column(Integer)
-    equity_curve: Mapped[list] = mapped_column(JSONB) # List of {time, equity}
-    metrics: Mapped[dict] = mapped_column(JSONB) # Detailed trades etc
+    equity_curve: Mapped[list] = mapped_column(JSONB)  # List of {time, equity}
+    metrics: Mapped[dict] = mapped_column(JSONB)  # Detailed trades etc
+
 
 # --- System State Persistence ---
+
 
 class SystemState(Base):
     """
     Persists system-level state like trading service status.
     Survives server restarts.
     """
+
     __tablename__ = "system_state"
-    
-    key: Mapped[str] = mapped_column(String(50), primary_key=True)
+
+    key: Mapped[str] = mapped_column(String(200), primary_key=True)
     value: Mapped[str] = mapped_column(String(255))
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )

@@ -1,0 +1,117 @@
+"""Broker account management endpoints."""
+
+from __future__ import annotations
+
+from typing import List, Optional
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.database import get_db
+from app.domain.models import BrokerAccount
+
+router = APIRouter()
+
+
+class AccountResponse(BaseModel):
+    id: UUID
+    name: str
+    broker_type: str
+    config: dict
+    is_active: bool
+
+    class Config:
+        from_attributes = True
+
+
+class AccountCreateRequest(BaseModel):
+    name: str
+    broker_type: str  # 'alpaca' | 'kis'
+    credentials: dict
+    config: dict = {}
+
+
+class AccountUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    credentials: Optional[dict] = None
+    config: Optional[dict] = None
+    is_active: Optional[bool] = None
+
+
+@router.get("/", response_model=List[AccountResponse])
+async def list_accounts(db: AsyncSession = Depends(get_db)):
+    """List all broker accounts (credentials excluded)."""
+    result = await db.execute(select(BrokerAccount).order_by(BrokerAccount.name))
+    return result.scalars().all()
+
+
+@router.get("/{account_id}", response_model=AccountResponse)
+async def get_account(account_id: UUID, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(BrokerAccount).where(BrokerAccount.id == account_id)
+    )
+    account = result.scalar_one_or_none()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    return account
+
+
+@router.post("/", response_model=AccountResponse, status_code=201)
+async def create_account(req: AccountCreateRequest, db: AsyncSession = Depends(get_db)):
+    """Create a new broker account. Requires server restart to take effect."""
+    account = BrokerAccount(
+        name=req.name,
+        broker_type=req.broker_type,
+        credentials=req.credentials,
+        config=req.config,
+    )
+    db.add(account)
+    await db.commit()
+    await db.refresh(account)
+    return account
+
+
+@router.put("/{account_id}", response_model=AccountResponse)
+async def update_account(
+    account_id: UUID,
+    req: AccountUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Update account settings. Requires server restart to take effect."""
+    result = await db.execute(
+        select(BrokerAccount).where(BrokerAccount.id == account_id)
+    )
+    account = result.scalar_one_or_none()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    if req.name is not None:
+        account.name = req.name
+    if req.credentials is not None:
+        account.credentials = req.credentials
+    if req.config is not None:
+        account.config = req.config
+    if req.is_active is not None:
+        account.is_active = req.is_active
+
+    await db.commit()
+    await db.refresh(account)
+    return account
+
+
+@router.delete("/{account_id}")
+async def deactivate_account(account_id: UUID, db: AsyncSession = Depends(get_db)):
+    """Deactivate an account (soft delete)."""
+    result = await db.execute(
+        select(BrokerAccount).where(BrokerAccount.id == account_id)
+    )
+    account = result.scalar_one_or_none()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    account.is_active = False
+    await db.commit()
+    return {"message": f"Account '{account.name}' deactivated"}

@@ -4,37 +4,41 @@ from pydantic import BaseModel
 from enum import Enum
 from app.brokers.base import AccountInfo
 
+
 class SignalType(Enum):
     BUY = "BUY"
     SELL = "SELL"
     EXIT = "EXIT"
     HOLD = "HOLD"
 
+
 class StrategySignal(BaseModel):
     symbol: str
     type: SignalType
-    confidence: float = 1.0 # 0.0 to 1.0
+    confidence: float = 1.0  # 0.0 to 1.0
     timestamp: datetime = datetime.now()
     metadata: Dict[str, Any] = {}
     strategy_name: str = ""  # Name of strategy that generated this signal
     qty: float = 0.0  # Calculated order quantity
 
+
 class StrategyContext(BaseModel):
     """
     Context passed to the strategy execution.
     """
+
     symbol: str
     account: AccountInfo
-    params: Dict[str, Any] = {} # Strategy specific parameters
+    params: Dict[str, Any] = {}  # Strategy specific parameters
+
 
 class Strategy(Protocol):
     """
     Interface that all trading strategies must implement.
     """
-    
+
     @property
-    def name(self) -> str:
-        ...
+    def name(self) -> str: ...
 
     @property
     def timeframe(self) -> str:
@@ -45,17 +49,19 @@ class Strategy(Protocol):
         """Called once when strategy is loaded."""
         ...
 
-    async def on_bar(self, context: StrategyContext, candles: List[Any]) -> List[StrategySignal]:
+    async def on_bar(
+        self, context: StrategyContext, candles: List[Any]
+    ) -> List[StrategySignal]:
         """
-        Called on every bar/data update. 
+        Called on every bar/data update.
         """
         ...
-    
+
     def calculate_quantity(
-        self, 
-        signal: StrategySignal, 
+        self,
+        signal: StrategySignal,
         account: AccountInfo,
-        current_position_qty: float = 0.0
+        current_position_qty: float = 0.0,
     ) -> float:
         """
         Calculate order quantity for the given signal.

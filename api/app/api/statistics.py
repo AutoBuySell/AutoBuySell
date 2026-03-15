@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from typing import List, Optional
+from uuid import UUID
 import pandas as pd
 from datetime import datetime, timedelta, timezone
 
@@ -10,25 +11,40 @@ from app.domain.models import Position, Trade, Candle
 
 router = APIRouter()
 
+
 @router.get("/unrealized-income")
-async def get_unrealized_income(request: Request, db: AsyncSession = Depends(get_db)):
+async def get_unrealized_income(
+    request: Request,
+    account_id: Optional[UUID] = None,
+    db: AsyncSession = Depends(get_db),
+):
     """
-    Get current unrealized P/L for all active positions.
-    Fetches LIVE data from broker instead of stale DB data.
+    Get current unrealized P/L for active positions.
+    Fetches LIVE data from broker. Optional account_id filter.
     """
-    # Access broker via trading_service from app.state
-    trading_service = request.app.state.trading_service
-    broker_positions = await trading_service.broker.get_positions()
-    
+    coordinator = request.app.state.trading_service
+
+    if account_id:
+        brokers = [(account_id, coordinator.broker_manager.get(account_id))]
+    else:
+        brokers = coordinator.broker_manager.all_active()
+
     data = []
-    for p in broker_positions:
-        data.append({
-            "symbol": p.symbol,
-            "income": p.unrealized_pl,
-            "qty": p.qty,
-            "market_value": p.market_value
-        })
-        
+    for aid, broker in brokers:
+        try:
+            positions = await broker.get_positions()
+            for p in positions:
+                data.append(
+                    {
+                        "account_id": str(aid),
+                        "symbol": p.symbol,
+                        "income": p.unrealized_pl,
+                        "qty": p.qty,
+                        "market_value": p.market_value,
+                    }
+                )
+        except Exception:
+            pass
     return data
 
 
@@ -36,9 +52,10 @@ async def get_unrealized_income(request: Request, db: AsyncSession = Depends(get
 async def get_equity_performance(
     symbol: str,
     request: Request,
-    period: str = "1M", # 1W, 1M, 3M, 1Y, ALL
-    type: str = "nominal", # nominal, realized
-    db: AsyncSession = Depends(get_db)
+    period: str = "1M",  # 1W, 1M, 3M, 1Y, ALL
+    type: str = "nominal",  # nominal, realized
+    account_id: Optional[UUID] = None,
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Get historical performance for a specific equity.
@@ -47,11 +64,15 @@ async def get_equity_performance(
     # 1. Determine Date Range
     now = datetime.now(timezone.utc)
     start_date = now - timedelta(days=30)
-    if period == "1W": start_date = now - timedelta(days=7)
-    elif period == "3M": start_date = now - timedelta(days=90)
-    elif period == "1Y": start_date = now - timedelta(days=365)
-    elif period == "ALL": start_date = datetime(2020, 1, 1) # Arbitrary old date
-    
+    if period == "1W":
+        start_date = now - timedelta(days=7)
+    elif period == "3M":
+        start_date = now - timedelta(days=90)
+    elif period == "1Y":
+        start_date = now - timedelta(days=365)
+    elif period == "ALL":
+        start_date = datetime(2020, 1, 1)  # Arbitrary old date
+
     # 2. Fetch Candles (Daily)
     candles_res = await db.execute(
         select(Candle)
@@ -61,11 +82,20 @@ async def get_equity_performance(
         .order_by(Candle.timestamp.asc())
     )
     candles = candles_res.scalars().all()
-    
+
     if not candles:
         # Fallback for fresh DB: reconstruct from broker daily bars + broker trade fills.
-        trading_service = request.app.state.trading_service
-        broker = trading_service.broker
+        coordinator = request.app.state.trading_service
+        # Resolve broker: use specified account or first available
+        if account_id:
+            broker = coordinator.broker_manager.get(account_id)
+        else:
+            default_id = coordinator.broker_manager.default_account_id()
+            broker = (
+                coordinator.broker_manager.get(default_id)
+                if default_id
+                else coordinator.broker
+            )
         bars = await broker.get_historicals(symbol, "1D", 180)
         if not bars:
             return {"data": []}
@@ -88,19 +118,21 @@ async def get_equity_performance(
         )
         existing_exec_ids = {e for (e,) in existing_exec_res.all() if e}
         for f in fills:
-            exec_id = str(getattr(f, 'execution_id', '') or '')
+            exec_id = str(getattr(f, "execution_id", "") or "")
             if exec_id and exec_id in existing_exec_ids:
                 continue
-            db.add(Trade(
-                order_id=None,
-                symbol=symbol,
-                side=str(f.side).lower(),
-                qty=float(f.qty),
-                price=float(f.price),
-                commission=float(getattr(f, 'commission', 0.0) or 0.0),
-                execution_id=exec_id or None,
-                source='external',
-            ))
+            db.add(
+                Trade(
+                    order_id=None,
+                    symbol=symbol,
+                    side=str(f.side).lower(),
+                    qty=float(f.qty),
+                    price=float(f.price),
+                    commission=float(getattr(f, "commission", 0.0) or 0.0),
+                    execution_id=exec_id or None,
+                    source="external",
+                )
+            )
             if exec_id:
                 existing_exec_ids.add(exec_id)
         await db.commit()
@@ -120,13 +152,15 @@ async def get_equity_performance(
         qty_by_ts = {}
         for b in bars_desc:
             bar_dt = b.timestamp
-            while fill_idx < len(fills_desc) and fills_desc[fill_idx].executed_at > bar_dt:
+            while (
+                fill_idx < len(fills_desc) and fills_desc[fill_idx].executed_at > bar_dt
+            ):
                 f = fills_desc[fill_idx]
                 f_qty = float(f.qty)
                 side = str(f.side).lower()
-                if side == 'buy':
+                if side == "buy":
                     qty_cursor -= f_qty
-                elif side == 'sell':
+                elif side == "sell":
                     qty_cursor += f_qty
                 fill_idx += 1
             qty_by_ts[bar_dt] = max(qty_cursor, 0.0)
@@ -140,13 +174,16 @@ async def get_equity_performance(
         realized_by_ts = {}
         for b in bars:
             bar_dt = b.timestamp
-            while fill_idx2 < len(fills_asc) and fills_asc[fill_idx2].executed_at <= bar_dt:
+            while (
+                fill_idx2 < len(fills_asc)
+                and fills_asc[fill_idx2].executed_at <= bar_dt
+            ):
                 f = fills_asc[fill_idx2]
                 q = float(f.qty)
                 p = float(f.price)
-                comm = float(getattr(f, 'commission', 0.0) or 0.0)
+                comm = float(getattr(f, "commission", 0.0) or 0.0)
                 side = str(f.side).lower()
-                if side == 'buy':
+                if side == "buy":
                     total_cost = (run_qty * run_avg) + (q * p) + comm
                     run_qty += q
                     if run_qty > 0:
@@ -168,130 +205,136 @@ async def get_equity_performance(
             realized_income = float(realized_by_ts.get(b.timestamp, 0.0))
             nominal_income = unrealized_income + realized_income
 
-            history_data.append({
-                "date": b.timestamp.date().isoformat(),
-                "price": float(b.close),
-                "qty": bar_qty,
-                "unrealized_income": unrealized_income,
-                "realized_income": realized_income,
-                "nominal_income": nominal_income,
-                "total_bought": curr_avg_cost * bar_qty,
-                "total_sold": 0.0,
-            })
+            history_data.append(
+                {
+                    "date": b.timestamp.date().isoformat(),
+                    "price": float(b.close),
+                    "qty": bar_qty,
+                    "unrealized_income": unrealized_income,
+                    "realized_income": realized_income,
+                    "nominal_income": nominal_income,
+                    "total_bought": curr_avg_cost * bar_qty,
+                    "total_sold": 0.0,
+                }
+            )
 
         return {"data": history_data}
-        
+
     # 3. Fetch Trades (All time? Or just relevant? Need all time to know initial qty if start_date > first_trade)
     # Actually, calculating "Nominal Income" over a period requires knowing Qty at start_date.
     # So we fetch all trades up to now.
     trades_res = await db.execute(
-        select(Trade)
-        .where(Trade.symbol == symbol)
-        .order_by(Trade.created_at.asc())
+        select(Trade).where(Trade.symbol == symbol).order_by(Trade.created_at.asc())
     )
     trades = trades_res.scalars().all()
-    
+
     # 4. Reconstruct History
     # Convert to DataFrame for easier processing? Or manual loop.
     # Manual loop is fine.
-    
-    df_candles = pd.DataFrame([{
-        "date": c.timestamp.date(), 
-        "close": c.close
-    } for c in candles])
+
+    df_candles = pd.DataFrame(
+        [{"date": c.timestamp.date(), "close": c.close} for c in candles]
+    )
     df_candles.set_index("date", inplace=True)
-    
-    df_trades = pd.DataFrame([{
-        "date": t.created_at.date(),
-        "side": t.side,
-        "qty": t.qty,
-        "price": t.price,
-        "commission": t.commission
-    } for t in trades])
-    
+
+    df_trades = pd.DataFrame(
+        [
+            {
+                "date": t.created_at.date(),
+                "side": t.side,
+                "qty": t.qty,
+                "price": t.price,
+                "commission": t.commission,
+            }
+            for t in trades
+        ]
+    )
+
     # We need a daily series. Use candles index.
     # Iterate through days.
-    
+
     dates = []
     prices = []
     qtys = []
-    incomes = [] # Nominal or Realized
-    
+    incomes = []  # Nominal or Realized
+
     current_qty = 0.0
     avg_cost = 0.0
     realized_pl_cum = 0.0
-    
+
     # Process trades before start_date to get initial state
     pre_trades = []
     range_trades = []
-    
+
     if not df_trades.empty:
         start_date_date = start_date.date()
         for t in trades:
             t_date = t.created_at.date()
             if t_date < start_date_date:
                 # Update state
-                if t.side == 'buy':
+                if t.side == "buy":
                     # Include commission in initial cost basis
-                    total_cost = (current_qty * avg_cost) + (t.qty * t.price) + t.commission
+                    total_cost = (
+                        (current_qty * avg_cost) + (t.qty * t.price) + t.commission
+                    )
                     current_qty += t.qty
                     if current_qty > 0:
                         avg_cost = total_cost / current_qty
-                elif t.side == 'sell':
+                elif t.side == "sell":
                     # Realized P/L with commission
                     pl = (t.price - avg_cost) * t.qty - t.commission
                     realized_pl_cum += pl
                     current_qty -= t.qty
                     if current_qty <= 0:
                         current_qty = 0
-                        avg_cost = 0 # Reset?
+                        avg_cost = 0  # Reset?
             else:
-                pass # Will process in loop
-                
+                pass  # Will process in loop
+
     # Now iterate candles
     # Note: Logic above is simplified. Ideally we process day by day.
-    
+
     # Better approach:
     # 1. Create a timeline of all days in range
     # 2. For each day, apply trades that happened that day.
     # 3. Calculate metrics.
-    
+
     # Need to process ALL trades day by day to keep track of accurate average cost.
-    
+
     curr_qty = 0.0
     curr_avg_cost = 0.0
     curr_realized = 0.0
     total_bought = 0.0  # Cumulative purchase amount (including commission)
-    total_sold = 0.0    # Cumulative sale amount (after commission)
-    
+    total_sold = 0.0  # Cumulative sale amount (after commission)
+
     # Sort trades by time
     trade_idx = 0
     num_trades = len(trades)
-    
+
     history_data = []
-    
+
     # We loop through candles to get "Close Price" for each day.
     # But we must process trades chronologically.
     # We need a merged timeline?
-    
+
     # Let's just loop candles. For each candle date, process all trades <= that date.
-    
+
     for c in candles:
         c_date = c.timestamp.date()
-        
+
         # Process new trades up to this candle's timestamp (or end of that day)
         # Assuming candle timestamp is EOD or start? Usually EOD for daily.
         # Let's assume inclusive of trades on that day.
-        
+
         while trade_idx < num_trades:
             t = trades[trade_idx]
             t_date = t.created_at.date()
-            
+
             if t_date > c_date:
                 break
-                
+
             # Apply Trade (with commission)
-            if t.side == 'buy':
+            if t.side == "buy":
                 # Include commission in cost basis
                 buy_cost = t.qty * t.price + t.commission
                 total_bought += buy_cost  # Accumulate total purchase
@@ -299,7 +342,7 @@ async def get_equity_performance(
                 curr_qty += t.qty
                 if curr_qty > 0:
                     curr_avg_cost = total_val / curr_qty
-            elif t.side == 'sell':
+            elif t.side == "sell":
                 # Use actual traded quantity (trade records are accurate)
                 qty_sold = t.qty
                 sell_revenue = t.price * qty_sold - t.commission
@@ -310,25 +353,25 @@ async def get_equity_performance(
                 # Allow negative qty for short selling scenarios
                 if curr_qty == 0:
                     curr_avg_cost = 0
-            
+
             trade_idx += 1
-            
+
         # Snapshot for this day
         current_value = c.close * curr_qty
         unrealized_income = current_value - (curr_avg_cost * curr_qty)
         nominal_income = current_value + total_sold - total_bought  # Total P/L
-        
-        history_data.append({
-            "date": c_date.isoformat(),
-            "price": c.close,
-            "qty": curr_qty,
-            "unrealized_income": unrealized_income,
-            "realized_income": curr_realized,
-            "nominal_income": nominal_income,
-            "total_bought": total_bought,
-            "total_sold": total_sold
-        })
-        
-    return {
-        "data": history_data
-    }
+
+        history_data.append(
+            {
+                "date": c_date.isoformat(),
+                "price": c.close,
+                "qty": curr_qty,
+                "unrealized_income": unrealized_income,
+                "realized_income": curr_realized,
+                "nominal_income": nominal_income,
+                "total_bought": total_bought,
+                "total_sold": total_sold,
+            }
+        )
+
+    return {"data": history_data}
