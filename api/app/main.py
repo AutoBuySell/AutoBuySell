@@ -4,12 +4,12 @@ from sqlalchemy import select, text
 
 from app.core.database import engine, Base, AsyncSessionLocal
 from app.core.config import settings
-from app.domain.models import BrokerAccount
+from app.domain.models import BrokerAccount, StrategyMeta, StrategyParam
+from app.strategies.registry import get_all_strategies
 
 from app.brokers.manager import BrokerManager
 from app.services.trading import TradingCoordinator
 
-from app.api import trading
 from app.api import settings as settings_router
 from app.api import data as data_router
 
@@ -61,6 +61,45 @@ async def _ensure_accounts_in_db():
         await db.commit()
 
 
+async def _ensure_strategy_metadata_in_db():
+    """Seed strategy metadata/default params on fresh DBs."""
+    all_strategies = get_all_strategies()
+    async with AsyncSessionLocal() as db:
+        for name, strategy in all_strategies.items():
+            row = (
+                await db.execute(select(StrategyMeta).where(StrategyMeta.name == name))
+            ).scalar_one_or_none()
+            if not row:
+                db.add(
+                    StrategyMeta(
+                        name=name,
+                        description=getattr(strategy, "description", None),
+                        class_path=strategy.__class__.__name__,
+                    )
+                )
+
+            active_default = (
+                await db.execute(
+                    select(StrategyParam)
+                    .where(StrategyParam.strategy_name == name)
+                    .where(StrategyParam.symbol.is_(None))
+                    .where(StrategyParam.is_active == True)
+                )
+            ).scalar_one_or_none()
+            if not active_default:
+                db.add(
+                    StrategyParam(
+                        strategy_name=name,
+                        symbol=None,
+                        version=1,
+                        params=getattr(strategy, "params", {}) or {},
+                        is_active=True,
+                    )
+                )
+
+        await db.commit()
+
+
 async def _load_active_accounts() -> list[BrokerAccount]:
     """Load active accounts from DB."""
     async with AsyncSessionLocal() as db:
@@ -93,8 +132,9 @@ async def lifespan(app: FastAPI):
     # Apply compatibility DDL for older DBs
     await _ensure_schema_compat()
 
-    # Ensure accounts from env exist in DB
+    # Ensure accounts/strategies from config exist in DB
     await _ensure_accounts_in_db()
+    await _ensure_strategy_metadata_in_db()
 
     # Load accounts and initialize broker instances
     accounts = await _load_active_accounts()
@@ -132,17 +172,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(trading.router, prefix="/api/v1/trading", tags=["Trading"])
 app.include_router(settings_router.router, prefix="/api/v1/settings", tags=["Settings"])
 app.include_router(data_router.router, prefix="/api/v1/data", tags=["Data"])
 
 from app.api import backtest
 
 app.include_router(backtest.router, prefix="/api/v1/backtest", tags=["Backtest"])
-
-from app.api import logs
-
-app.include_router(logs.router, prefix="/api/v1/logs", tags=["Logs"])
 
 from app.api import statistics
 

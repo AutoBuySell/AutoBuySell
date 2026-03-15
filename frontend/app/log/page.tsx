@@ -2,7 +2,8 @@
 
 import { useState, useEffect } from 'react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
-import { accountsApi, logApi, type BrokerAccount, type LogEntry } from '@/lib/api';
+import { logApi, type LogEntry } from '@/lib/api';
+import { useSelectedAccountId } from '@/lib/accountScope';
 
 type LogTab = 'trades' | 'signals' | 'system';
 
@@ -36,8 +37,7 @@ export default function LogPage() {
     const [trades, setTrades] = useState<TradeLog[]>([]);
     const [signals, setSignals] = useState<SignalLog[]>([]);
     const [systemLogs, setSystemLogs] = useState<SystemLog[]>([]);
-    const [accounts, setAccounts] = useState<BrokerAccount[]>([]);
-    const [selectedAccountId, setSelectedAccountId] = useState('');
+    const [selectedAccountId] = useSelectedAccountId();
     const [filter, setFilter] = useState('');
     const [page, setPage] = useState(0);
     const [pageSize] = useState(100);
@@ -45,21 +45,6 @@ export default function LogPage() {
     useEffect(() => {
         setPage(0);
     }, [activeTab, filter, selectedAccountId]);
-
-    useEffect(() => {
-        const loadAccounts = async () => {
-            try {
-                const data = await accountsApi.list(true);
-                setAccounts(data);
-                if (!selectedAccountId && data.length > 0) {
-                    setSelectedAccountId(data[0].id);
-                }
-            } catch (e) {
-                console.error('Failed to load accounts', e);
-            }
-        };
-        loadAccounts();
-    }, []);
 
     useEffect(() => {
         loadData();
@@ -105,23 +90,6 @@ export default function LogPage() {
                     </button>
                 ))}
             </div>
-
-            <Card>
-                <CardContent className="py-3">
-                    <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                        <div className="text-sm font-medium">Account Scope</div>
-                        <select
-                            value={selectedAccountId}
-                            onChange={(e) => setSelectedAccountId(e.target.value)}
-                            className="w-full md:w-[420px] px-2 py-1 border rounded text-sm bg-background text-foreground"
-                        >
-                            {accounts.map((a) => (
-                                <option key={a.id} value={a.id}>{a.name} ({a.broker_type})</option>
-                            ))}
-                        </select>
-                    </div>
-                </CardContent>
-            </Card>
 
             {/* Filter */}
             <div className="flex flex-wrap gap-2 items-center">

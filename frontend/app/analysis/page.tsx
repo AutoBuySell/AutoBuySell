@@ -2,7 +2,8 @@
 
 import { useState, useEffect } from 'react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
-import { backtestApi, BacktestRun, BacktestResult, dataApi, SymbolInfo, tradingApi, accountsApi, PortfolioHistory, Position } from '@/lib/api';
+import { backtestApi, BacktestRun, BacktestResult, dataApi, SymbolInfo, tradingApi, PortfolioHistory, Position } from '@/lib/api';
+import { useSelectedAccountId } from '@/lib/accountScope';
 import { wsClient } from '@/lib/websocket';
 import { 
     ComposedChart, Line, AreaChart, Area, PieChart, Pie, Cell, 
@@ -55,7 +56,7 @@ export default function AnalysisPage() {
   const [history, setHistory] = useState<PortfolioHistory | null>(null);
   const [positions, setPositions] = useState<Position[]>([]);
   const [historyPeriod, setHistoryPeriod] = useState('1M');
-  const [selectedAccountId, setSelectedAccountId] = useState<string>('');
+  const [selectedAccountId] = useSelectedAccountId();
 
   useEffect(() => {
     loadInitialData();
@@ -119,11 +120,6 @@ export default function AnalysisPage() {
 
         const syms = await dataApi.getSymbols();
         setSymbols(syms);
-
-        const accs = await accountsApi.list(true);
-        if (accs.length > 0) {
-            setSelectedAccountId(accs[0].id);
-        }
 
         loadRuns();
     } catch (e) {
@@ -823,7 +819,7 @@ export default function AnalysisPage() {
                   </Card>
     
                   {/* Nominal Incomes Bar Chart */}
-                  <NominalIncomes refreshTrigger={refreshTrigger} />
+                  <NominalIncomes accountId={selectedAccountId} refreshTrigger={refreshTrigger} />
               </div>
 
               {/* Middle Row: Each Equity Performance (Full Width) */}

@@ -260,7 +260,10 @@ class AccountWorker:
                     continue
 
                 existing = await db.execute(
-                    select(Trade).where(Trade.execution_id == fill.execution_id)
+                    select(Trade).where(
+                        Trade.account_id == self.account_id,
+                        Trade.execution_id == fill.execution_id,
+                    )
                 )
                 if existing.scalar_one_or_none():
                     continue
@@ -269,20 +272,40 @@ class AccountWorker:
                 order = None
                 if fill.order_id:
                     order_result = await db.execute(
-                        select(Order).where(Order.broker_order_id == fill.order_id)
+                        select(Order).where(
+                            Order.account_id == self.account_id,
+                            Order.broker_order_id == fill.order_id,
+                        )
                     )
                     order = order_result.scalar_one_or_none()
-                    if order:
-                        source = "system"
-                    else:
-                        external_count += 1
-                else:
+
+                # Ensure external fills still create orders for consistent logs/analysis.
+                if not order:
                     external_count += 1
+                    order = Order(
+                        account_id=self.account_id,
+                        client_order_id=f"external-sync:{self.account_id}:{fill.execution_id}"[:100],
+                        broker_order_id=fill.order_id,
+                        symbol=fill.symbol,
+                        side=fill.side,
+                        type="market",
+                        qty=float(fill.qty),
+                        limit_price=None,
+                        status="filled",
+                        filled_qty=float(fill.qty),
+                        filled_avg_price=float(fill.price),
+                        strategy_name="external_sync",
+                        created_at=fill.executed_at,
+                    )
+                    db.add(order)
+                    await db.flush()
+                else:
+                    source = "system"
 
                 db.add(
                     Trade(
                         account_id=self.account_id,
-                        order_id=order.id if order else None,
+                        order_id=order.id,
                         symbol=fill.symbol,
                         side=fill.side,
                         qty=fill.qty,

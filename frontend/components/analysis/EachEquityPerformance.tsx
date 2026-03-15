@@ -49,7 +49,7 @@ export default function EachEquityPerformance({ accountId }: { accountId?: strin
     const loadData = async () => {
         setLoading(true);
         try {
-            const res = await statisticsApi.getEquityPerformance(selectedSymbol, period, 'nominal');
+            const res = await statisticsApi.getEquityPerformance(selectedSymbol, period, 'nominal', accountId);
             setData(res ?? []);
         } catch (e) {
             console.error("Failed to load equity performance", e);

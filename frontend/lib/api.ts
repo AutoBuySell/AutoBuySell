@@ -248,11 +248,13 @@ export const logApi = {
 };
 
 export const statisticsApi = {
-    getUnrealizedIncome: async () => {
-        const { data } = await apiClient.get<{symbol: string, income: number, qty: number}[]>('/statistics/unrealized-income');
+    getUnrealizedIncome: async (accountId: string) => {
+        const { data } = await apiClient.get<{symbol: string, income: number, qty: number}[]>('/statistics/unrealized-income', {
+          params: { account_id: accountId }
+        });
         return data;
     },
-    getEquityPerformance: async (symbol: string, period: string = '1M', type: string = 'nominal') => {
+    getEquityPerformance: async (symbol: string, period: string = '1M', type: string = 'nominal', accountId?: string) => {
         const { data } = await apiClient.get<{data: Array<{
             date: string, 
             price: number, 
@@ -263,7 +265,7 @@ export const statisticsApi = {
             total_bought?: number,
             total_sold?: number
         }>}>(`/statistics/equity-performance/${symbol}`, {
-            params: { period, type }
+            params: { period, type, ...(accountId ? { account_id: accountId } : {}) }
         });
         return data.data;
     }
