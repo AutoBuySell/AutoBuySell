@@ -9,6 +9,7 @@ from app.strategies.registry import get_all_strategies
 
 from app.brokers.manager import BrokerManager
 from app.services.trading import TradingCoordinator
+from app.services.migration import MigrationService
 
 from app.api import settings as settings_router
 from app.api import data as data_router
@@ -27,23 +28,39 @@ logger = logging.getLogger(__name__)
 async def _ensure_accounts_in_db():
     """
     Ensure broker accounts from env config exist in DB.
-    On first run (or when BROKER_ACCOUNTS env changes), upsert rows
-    so that the BrokerManager can load them.
+    Upsert key is external_id (immutable), not display name.
     """
     accounts_config = settings.get_broker_accounts_config()
     if not accounts_config:
         return
 
+    seen_external_ids: set[str] = set()
+
     async with AsyncSessionLocal() as db:
         for acct_cfg in accounts_config:
             name = acct_cfg["name"]
+            external_id = str(acct_cfg.get("external_id") or name).strip()
+            if not external_id:
+                logger.warning("Skipping account with empty external_id/name: %s", acct_cfg)
+                continue
+
+            if external_id in seen_external_ids:
+                logger.warning(
+                    "Duplicate external_id '%s' in broker_accounts config. "
+                    "Only the first occurrence will be applied.",
+                    external_id,
+                )
+                continue
+            seen_external_ids.add(external_id)
+
             result = await db.execute(
-                select(BrokerAccount).where(BrokerAccount.name == name)
+                select(BrokerAccount).where(BrokerAccount.external_id == external_id)
             )
             existing = result.scalar_one_or_none()
 
             if existing:
                 # Update credentials/config from env (env is source of truth)
+                existing.name = name
                 existing.broker_type = acct_cfg["broker_type"]
                 existing.credentials = acct_cfg.get("credentials", {})
                 existing.config = acct_cfg.get("config", {})
@@ -51,6 +68,7 @@ async def _ensure_accounts_in_db():
             else:
                 db.add(
                     BrokerAccount(
+                        external_id=external_id,
                         name=name,
                         broker_type=acct_cfg["broker_type"],
                         credentials=acct_cfg.get("credentials", {}),
@@ -100,6 +118,41 @@ async def _ensure_strategy_metadata_in_db():
         await db.commit()
 
 
+async def _run_initial_migrations_for_accounts(broker_manager: BrokerManager):
+    """Run one-time migration per active account (skips if already migrated)."""
+    svc = MigrationService()
+    async with AsyncSessionLocal() as db:
+        for account_id, broker in broker_manager.all_active():
+            acct = broker_manager.get_account(account_id)
+            try:
+                result = await svc.migrate_account_trades(
+                    db=db,
+                    account_id=account_id,
+                    broker=broker,
+                )
+                if result.skipped:
+                    logger.info(
+                        "Migration skipped for account '%s' (external_id=%s): %s",
+                        acct.name,
+                        acct.external_id,
+                        result.skip_reason,
+                    )
+                else:
+                    logger.info(
+                        "Migration completed for account '%s' (external_id=%s): fills=%s",
+                        acct.name,
+                        acct.external_id,
+                        result.fills_fetched,
+                    )
+            except Exception as e:
+                logger.warning(
+                    "Migration failed for account '%s' (external_id=%s): %s",
+                    acct.name,
+                    acct.external_id,
+                    e,
+                )
+
+
 async def _load_active_accounts() -> list[BrokerAccount]:
     """Load active accounts from DB."""
     async with AsyncSessionLocal() as db:
@@ -120,6 +173,20 @@ async def _ensure_schema_compat():
         # Older DBs may miss newly introduced columns used by current ORM model.
         await conn.execute(
             text("ALTER TABLE orders ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(200)")
+        )
+
+        # Immutable account identity key for safe rename support.
+        await conn.execute(
+            text("ALTER TABLE broker_accounts ADD COLUMN IF NOT EXISTS external_id VARCHAR(100)")
+        )
+        await conn.execute(
+            text("UPDATE broker_accounts SET external_id=name WHERE external_id IS NULL OR external_id='' ")
+        )
+        await conn.execute(
+            text("ALTER TABLE broker_accounts ALTER COLUMN external_id SET NOT NULL")
+        )
+        await conn.execute(
+            text("CREATE UNIQUE INDEX IF NOT EXISTS uq_broker_accounts_external_id ON broker_accounts(external_id)")
         )
 
 
@@ -143,6 +210,9 @@ async def lifespan(app: FastAPI):
 
     broker_manager = BrokerManager()
     await broker_manager.initialize(accounts)
+
+    # One-time trade migration per account on startup (state-aware skip).
+    await _run_initial_migrations_for_accounts(broker_manager)
 
     # Create coordinator (replaces old TradingService)
     coordinator = TradingCoordinator(broker_manager)

@@ -165,6 +165,10 @@ export const accountsApi = {
       params: { active_only: activeOnly },
     });
     return data;
+  },
+  migrateTrades: async (accountId: string) => {
+    const { data } = await apiClient.post(`/accounts/${accountId}/migrate-trades`);
+    return data;
   }
 };
 

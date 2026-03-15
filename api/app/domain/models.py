@@ -42,6 +42,7 @@ class BrokerAccount(TimeStampedBase):
 
     __tablename__ = "broker_accounts"
 
+    external_id: Mapped[str] = mapped_column(String(100), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(100), unique=True)
     broker_type: Mapped[str] = mapped_column(String(20))  # 'alpaca' | 'kis'
     credentials: Mapped[dict] = mapped_column(JSONB, default=dict)

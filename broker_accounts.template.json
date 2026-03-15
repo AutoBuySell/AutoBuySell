@@ -1,5 +1,6 @@
 [
   {
+    "external_id": "kis-live-1",
     "name": "kis-live-1",
     "broker_type": "kis",
     "credentials": {
@@ -18,6 +19,7 @@
     }
   },
   {
+    "external_id": "kis-paper-1",
     "name": "kis-paper-1",
     "broker_type": "kis",
     "credentials": {
@@ -36,6 +38,7 @@
     }
   },
   {
+    "external_id": "alpaca-live-1",
     "name": "alpaca-live-1",
     "broker_type": "alpaca",
     "credentials": {
@@ -48,6 +51,7 @@
     }
   },
   {
+    "external_id": "alpaca-paper-1",
     "name": "alpaca-paper-1",
     "broker_type": "alpaca",
     "credentials": {
