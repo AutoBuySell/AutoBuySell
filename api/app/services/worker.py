@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List
 from uuid import UUID
 import logging
@@ -240,6 +240,30 @@ class AccountWorker:
             from app.domain.models import Trade, Order
 
             logger.info(f"[{self.account_name}] Starting trade sync...")
+
+            # 3-minute cooldown guard for repeated sync triggers
+            now = datetime.utcnow()
+            last_sync_key = _state_key(self.account_id, "trade_sync_last_run_at")
+            last_sync_state = (
+                await db.execute(select(SystemState).where(SystemState.key == last_sync_key))
+            ).scalar_one_or_none()
+            if last_sync_state:
+                try:
+                    last_run = datetime.fromisoformat(last_sync_state.value)
+                    if now - last_run < timedelta(minutes=3):
+                        logger.info(
+                            f"[{self.account_name}] Trade sync skipped: cooldown active (<3m)"
+                        )
+                        return
+                except Exception:
+                    pass
+
+            # mark this sync attempt immediately to avoid near-simultaneous duplicate runs
+            if last_sync_state:
+                last_sync_state.value = now.isoformat()
+            else:
+                db.add(SystemState(key=last_sync_key, value=now.isoformat()))
+            await db.commit()
 
             trade_sync_after = None
             result = await db.execute(
