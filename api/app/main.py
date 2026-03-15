@@ -9,6 +9,7 @@ from app.strategies.registry import get_all_strategies
 
 from app.brokers.manager import BrokerManager
 from app.services.trading import TradingCoordinator
+from app.services.migration import MigrationService
 
 from app.api import settings as settings_router
 from app.api import data as data_router
@@ -117,6 +118,41 @@ async def _ensure_strategy_metadata_in_db():
         await db.commit()
 
 
+async def _run_initial_migrations_for_accounts(broker_manager: BrokerManager):
+    """Run one-time migration per active account (skips if already migrated)."""
+    svc = MigrationService()
+    async with AsyncSessionLocal() as db:
+        for account_id, broker in broker_manager.all_active():
+            acct = broker_manager.get_account(account_id)
+            try:
+                result = await svc.migrate_account_trades(
+                    db=db,
+                    account_id=account_id,
+                    broker=broker,
+                )
+                if result.skipped:
+                    logger.info(
+                        "Migration skipped for account '%s' (external_id=%s): %s",
+                        acct.name,
+                        acct.external_id,
+                        result.skip_reason,
+                    )
+                else:
+                    logger.info(
+                        "Migration completed for account '%s' (external_id=%s): fills=%s",
+                        acct.name,
+                        acct.external_id,
+                        result.fills_fetched,
+                    )
+            except Exception as e:
+                logger.warning(
+                    "Migration failed for account '%s' (external_id=%s): %s",
+                    acct.name,
+                    acct.external_id,
+                    e,
+                )
+
+
 async def _load_active_accounts() -> list[BrokerAccount]:
     """Load active accounts from DB."""
     async with AsyncSessionLocal() as db:
@@ -174,6 +210,9 @@ async def lifespan(app: FastAPI):
 
     broker_manager = BrokerManager()
     await broker_manager.initialize(accounts)
+
+    # One-time trade migration per account on startup (state-aware skip).
+    await _run_initial_migrations_for_accounts(broker_manager)
 
     # Create coordinator (replaces old TradingService)
     coordinator = TradingCoordinator(broker_manager)

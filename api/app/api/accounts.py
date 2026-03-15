@@ -48,6 +48,8 @@ class AccountUpdateRequest(BaseModel):
 class MigrationResponse(BaseModel):
     account_id: UUID
     first_deploy: bool
+    skipped: bool
+    skip_reason: Optional[str] = None
     fills_fetched: int
     trades_inserted: int
     trades_updated: int
