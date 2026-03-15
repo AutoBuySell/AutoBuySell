@@ -190,8 +190,9 @@ app.include_router(ws.router, prefix="/api/v1/ws", tags=["WebSocket"])
 from app.api import accounts
 from app.api import account_scoped
 
-app.include_router(accounts.router, prefix="/api/v1/accounts", tags=["Accounts"])
+# Register account-scoped static routes first (e.g. /accounts/_status)
 app.include_router(account_scoped.router, prefix="/api/v1/accounts", tags=["AccountScoped"])
+app.include_router(accounts.router, prefix="/api/v1/accounts", tags=["Accounts"])
 
 
 @app.get("/health")

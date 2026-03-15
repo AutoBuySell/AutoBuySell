@@ -77,6 +77,12 @@ def _ensure_account(coordinator: TradingCoordinator, account_id: UUID):
         raise HTTPException(404, f"Account {account_id} not found")
 
 
+@router.get("/_status")
+async def get_accounts_status(request: Request):
+    coordinator = _get_coordinator(request)
+    return coordinator.get_status(None)
+
+
 @router.get("/{account_id}/trading/status")
 async def get_status(account_id: UUID, request: Request):
     coordinator = _get_coordinator(request)

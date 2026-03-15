@@ -126,7 +126,7 @@ const withAccount = (accountId?: string) => (
 
 export const tradingApi = {
   getGlobalStatus: async () => {
-    const { data } = await apiClient.get('/trading/status');
+    const { data } = await apiClient.get('/accounts/_status');
     return data;
   },
   getAccount: async (accountId: string) => {
