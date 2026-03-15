@@ -28,6 +28,7 @@ services:
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-autosys}:${POSTGRES_PASSWORD:-autosys}@db:5432/${POSTGRES_DB:-autosys}
     volumes:
       - ./api:/app
+      - ./broker_accounts.json:/app/broker_accounts.json:ro
     ports:
       - "8002:8000"
     depends_on:
