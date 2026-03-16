@@ -50,6 +50,22 @@ class BrokerAccount(TimeStampedBase):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
+class AccountWatchlist(TimeStampedBase):
+    """Per-account watchlist membership and activation state."""
+
+    __tablename__ = "account_watchlists"
+    __table_args__ = (
+        UniqueConstraint("account_id", "symbol", name="uq_account_watchlists_account_symbol"),
+        Index("ix_account_watchlists_account_active", "account_id", "is_active"),
+    )
+
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("broker_accounts.id"), nullable=False, index=True
+    )
+    symbol: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+
 # --- Market Data ---
 
 

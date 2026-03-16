@@ -17,7 +17,7 @@ from app.brokers.base import (
     PortfolioHistory,
 )
 from app.core.database import get_db
-from app.domain.models import LogEntry, Order, SignalLog
+from app.domain.models import AccountWatchlist, LogEntry, Order, SignalLog, Symbol
 from app.services.trading import TradingCoordinator
 
 router = APIRouter()
@@ -70,6 +70,11 @@ class SystemLogResponse(BaseModel):
     message: str
     context: Optional[dict]
     created_at: datetime
+
+
+class WatchlistItem(BaseModel):
+    symbol: str
+    is_active: bool = True
 
 
 def _get_coordinator(request: Request) -> TradingCoordinator:
@@ -197,6 +202,68 @@ async def get_signal_logs(
         query = query.filter(SignalLog.strategy_name == strategy)
     result = await db.execute(query)
     return result.scalars().all()
+
+
+@router.get("/{account_id}/watchlist", response_model=List[WatchlistItem])
+async def get_watchlist(account_id: UUID, db: AsyncSession = Depends(get_db)):
+    query = (
+        select(AccountWatchlist)
+        .where(AccountWatchlist.account_id == account_id, AccountWatchlist.is_active)
+        .order_by(AccountWatchlist.symbol.asc())
+    )
+    rows = (await db.execute(query)).scalars().all()
+    return [WatchlistItem(symbol=r.symbol, is_active=r.is_active) for r in rows]
+
+
+@router.post("/{account_id}/watchlist", response_model=WatchlistItem)
+async def add_watchlist_item(account_id: UUID, item: WatchlistItem, db: AsyncSession = Depends(get_db)):
+    symbol = item.symbol.upper().strip()
+    if not symbol:
+        raise HTTPException(400, "symbol is required")
+
+    # Ensure symbol master exists
+    existing_symbol = (
+        await db.execute(select(Symbol).where(Symbol.ticker == symbol))
+    ).scalar_one_or_none()
+    if not existing_symbol:
+        db.add(Symbol(ticker=symbol, name=symbol, sector=None, is_active=True))
+
+    existing = (
+        await db.execute(
+            select(AccountWatchlist).where(
+                AccountWatchlist.account_id == account_id,
+                AccountWatchlist.symbol == symbol,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing:
+        existing.is_active = True
+        await db.commit()
+        return WatchlistItem(symbol=existing.symbol, is_active=existing.is_active)
+
+    row = AccountWatchlist(account_id=account_id, symbol=symbol, is_active=True)
+    db.add(row)
+    await db.commit()
+    return WatchlistItem(symbol=row.symbol, is_active=row.is_active)
+
+
+@router.delete("/{account_id}/watchlist/{symbol}")
+async def remove_watchlist_item(account_id: UUID, symbol: str, db: AsyncSession = Depends(get_db)):
+    sym = symbol.upper().strip()
+    row = (
+        await db.execute(
+            select(AccountWatchlist).where(
+                AccountWatchlist.account_id == account_id,
+                AccountWatchlist.symbol == sym,
+            )
+        )
+    ).scalar_one_or_none()
+    if not row:
+        raise HTTPException(404, "watchlist symbol not found")
+
+    row.is_active = False
+    await db.commit()
+    return {"message": f"{sym} removed from account watchlist"}
 
 
 @router.get("/{account_id}/logs/system", response_model=List[SystemLogResponse])

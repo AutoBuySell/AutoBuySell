@@ -21,7 +21,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from app.brokers.base import BrokerAdapter
 from app.brokers.manager import BrokerManager
 from app.core.database import AsyncSessionLocal
-from app.domain.models import Symbol
+from app.domain.models import AccountWatchlist
 from app.services.data import DataService
 from app.services.execution import ExecutionService
 from app.services.risk import RiskManager
@@ -217,8 +217,12 @@ class TradingCoordinator:
         """Daily OHLCV sync for all watchlist symbols (shared, not per-account)."""
         async with AsyncSessionLocal() as db:
             try:
-                symbols = (await db.execute(select(Symbol))).scalars().all()
-                tickers = sorted({s.ticker for s in symbols if s.ticker})
+                rows = (
+                    await db.execute(
+                        select(AccountWatchlist.symbol).where(AccountWatchlist.is_active)
+                    )
+                ).all()
+                tickers = sorted({r[0] for r in rows if r and r[0]})
                 if not tickers:
                     return
 

@@ -16,12 +16,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.brokers.base import BrokerAdapter, AccountInfo
 from app.core.database import AsyncSessionLocal
 from app.domain.models import (
+    AccountWatchlist,
     Candle,
     LogEntry,
     Position,
     RuntimeCandle,
     StrategyParam,
-    Symbol,
     SystemState,
 )
 from app.services.execution import ExecutionService
@@ -133,11 +133,19 @@ class AccountWorker:
                     )
                     return
 
-                symbols = (
-                    (await db.execute(select(Symbol).where(Symbol.is_active)))
+                watchlist_rows = (
+                    (
+                        await db.execute(
+                            select(AccountWatchlist).where(
+                                AccountWatchlist.account_id == self.account_id,
+                                AccountWatchlist.is_active,
+                            )
+                        )
+                    )
                     .scalars()
                     .all()
                 )
+                symbols = sorted({w.symbol for w in watchlist_rows if w.symbol})
                 if not symbols:
                     return
 
@@ -165,10 +173,10 @@ class AccountWorker:
                 )
                 overrides = {p.symbol: p.params for p in overrides_res.scalars().all()}
 
-                for symbol in symbols:
-                    current_params = overrides.get(symbol.ticker, default_param.params)
+                for ticker in symbols:
+                    current_params = overrides.get(ticker, default_param.params)
                     await strategy.initialize(current_params)
-                    await self._process_symbol(db, symbol.ticker, strategy, account)
+                    await self._process_symbol(db, ticker, strategy, account)
 
             except Exception as e:
                 logger.error(f"[{self.account_name}] Cycle error: {e}")

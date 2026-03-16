@@ -4,7 +4,7 @@ from sqlalchemy import select, text
 
 from app.core.database import engine, Base, AsyncSessionLocal
 from app.core.config import settings
-from app.domain.models import BrokerAccount, StrategyMeta, StrategyParam
+from app.domain.models import AccountWatchlist, BrokerAccount, StrategyMeta, StrategyParam, Symbol
 from app.strategies.registry import get_all_strategies
 
 from app.brokers.manager import BrokerManager
@@ -117,6 +117,46 @@ async def _ensure_strategy_metadata_in_db():
         await db.commit()
 
 
+async def _ensure_account_watchlists_seeded():
+    """Seed per-account watchlists for paper accounts from current active symbols if empty."""
+    async with AsyncSessionLocal() as db:
+        symbols = (
+            await db.execute(select(Symbol).where(Symbol.is_active == True))
+        ).scalars().all()
+        tickers = sorted({s.ticker for s in symbols if s.ticker})
+        if not tickers:
+            return
+
+        accounts = (
+            await db.execute(select(BrokerAccount).where(BrokerAccount.is_active == True))
+        ).scalars().all()
+
+        for acct in accounts:
+            cfg = acct.config or {}
+            base_url = str(cfg.get("base_url", "") or "").lower()
+            name_l = acct.name.lower()
+            # KIS: explicit is_paper; Alpaca: infer from paper endpoint/name.
+            is_paper = bool(cfg.get("is_paper", False)) or ("paper" in base_url) or ("paper" in name_l)
+            if not is_paper:
+                continue
+
+            existing_count = (
+                await db.execute(
+                    select(AccountWatchlist)
+                    .where(AccountWatchlist.account_id == acct.id)
+                    .where(AccountWatchlist.is_active == True)
+                )
+            ).scalars().first()
+            if existing_count:
+                continue
+
+            for t in tickers:
+                db.add(AccountWatchlist(account_id=acct.id, symbol=t, is_active=True))
+            logger.info("Seeded %s watchlist symbols for paper account '%s'", len(tickers), acct.name)
+
+        await db.commit()
+
+
 async def _load_active_accounts() -> list[BrokerAccount]:
     """Load active accounts from DB."""
     async with AsyncSessionLocal() as db:
@@ -163,9 +203,10 @@ async def lifespan(app: FastAPI):
     # Apply compatibility DDL for older DBs
     await _ensure_schema_compat()
 
-    # Ensure accounts/strategies from config exist in DB
+    # Ensure accounts/strategies/watchlists from config exist in DB
     await _ensure_accounts_in_db()
     await _ensure_strategy_metadata_in_db()
+    await _ensure_account_watchlists_seeded()
 
     # Load accounts and initialize broker instances
     accounts = await _load_active_accounts()
