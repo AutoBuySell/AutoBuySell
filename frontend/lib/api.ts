@@ -212,6 +212,24 @@ export const dataApi = {
     }
 };
 
+export const accountSettingsApi = {
+    getStrategyParams: async (accountId: string, strategy: string, symbol?: string | null) => {
+        const params = symbol ? { symbol } : {};
+        try {
+            const { data } = await apiClient.get<{version: number, symbol: string | null, params: Record<string, any>}>(`/accounts/${accountId}/settings/strategies/${strategy}/params/active`, { params });
+            return data;
+        } catch (e: any) {
+            if (e.response && e.response.status === 404) return null;
+            throw e;
+        }
+    },
+    updateStrategyParams: async (accountId: string, strategy: string, params: Record<string, any>, symbol?: string | null) => {
+        const query = symbol ? `?symbol=${symbol}` : '';
+        const { data } = await apiClient.put(`/accounts/${accountId}/settings/strategies/${strategy}/params${query}`, { params });
+        return data;
+    }
+};
+
 export const backtestApi = {
     getStrategies: async () => {
         const { data } = await apiClient.get<StrategyMeta[]>('/settings/strategies');

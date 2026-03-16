@@ -154,11 +154,23 @@ class AccountWorker:
 
                 default_res = await db.execute(
                     select(StrategyParam)
+                    .where(StrategyParam.account_id == self.account_id)
                     .where(StrategyParam.strategy_name == strategy_name)
                     .where(StrategyParam.is_active)
                     .where(StrategyParam.symbol.is_(None))
                 )
                 default_param = default_res.scalar_one_or_none()
+                if not default_param:
+                    # Backward-compatible fallback for legacy global rows
+                    default_param = (
+                        await db.execute(
+                            select(StrategyParam)
+                            .where(StrategyParam.account_id.is_(None))
+                            .where(StrategyParam.strategy_name == strategy_name)
+                            .where(StrategyParam.is_active)
+                            .where(StrategyParam.symbol.is_(None))
+                        )
+                    ).scalar_one_or_none()
                 if not default_param:
                     logger.warning(
                         f"[{self.account_name}] No default strategy params found."
@@ -167,6 +179,7 @@ class AccountWorker:
 
                 overrides_res = await db.execute(
                     select(StrategyParam)
+                    .where(StrategyParam.account_id == self.account_id)
                     .where(StrategyParam.strategy_name == strategy_name)
                     .where(StrategyParam.is_active)
                     .where(StrategyParam.symbol.is_not(None))
