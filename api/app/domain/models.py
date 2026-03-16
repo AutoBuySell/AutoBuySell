@@ -176,6 +176,9 @@ class StrategyParam(TimeStampedBase):
 
     __tablename__ = "strategy_params"
 
+    account_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("broker_accounts.id"), nullable=True, index=True
+    )
     strategy_name: Mapped[str] = mapped_column(ForeignKey("strategies.name"))
     version: Mapped[int] = mapped_column(Integer, default=1)
     symbol: Mapped[Optional[str]] = mapped_column(
@@ -188,7 +191,7 @@ class StrategyParam(TimeStampedBase):
 
     __table_args__ = (
         UniqueConstraint(
-            "strategy_name", "symbol", "version", name="uq_strategy_symbol_version"
+            "account_id", "strategy_name", "symbol", "version", name="uq_strategy_account_symbol_version"
         ),
     )
 

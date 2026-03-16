@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
-import { backtestApi, watchlistApi } from '@/lib/api';
+import { accountSettingsApi, backtestApi, watchlistApi } from '@/lib/api';
 
 interface StrategyMeta {
     name: string;
@@ -71,13 +71,17 @@ export default function SettingsPanel({ accountId }: { accountId?: string }) {
         setLoading(true);
         try {
             // 1. Fetch Defaults (Always)
-            const defData = await backtestApi.getStrategyParams(selectedStrategy, null);
+            if (!accountId) {
+                setStatusMsg('No account selected');
+                return;
+            }
+            const defData = await accountSettingsApi.getStrategyParams(accountId, selectedStrategy, null);
             const defaults = defData ? defData.params : {};
             setDefaultParams(defaults);
 
             // 2. Fetch Override if scope is not default
             if (scope !== 'default') {
-                const overrideData = await backtestApi.getStrategyParams(selectedStrategy, scope);
+                const overrideData = await accountSettingsApi.getStrategyParams(accountId, selectedStrategy, scope);
                 if (overrideData) {
                     setParams(overrideData.params);
                     setStatusMsg(`Loaded override for ${scope} (v${overrideData.version})`);
@@ -109,7 +113,8 @@ export default function SettingsPanel({ accountId }: { accountId?: string }) {
         setLoading(true);
         try {
             const targetSymbol = scope === 'default' ? null : scope;
-            await backtestApi.updateStrategyParams(selectedStrategy, params, targetSymbol);
+            if (!accountId) return;
+            await accountSettingsApi.updateStrategyParams(accountId, selectedStrategy, params, targetSymbol);
             setStatusMsg('Settings saved successfully.');
             // Reload to confirm?
             setTimeout(() => setStatusMsg(''), 3000);

@@ -71,6 +71,7 @@ async def get_active_params(
     """Get the currently active parameters (Default or Symbol-specific)"""
     stmt = (
         select(StrategyParam)
+        .where(StrategyParam.account_id.is_(None))
         .where(StrategyParam.strategy_name == strategy_name)
         .where(StrategyParam.is_active == True)
     )
@@ -114,7 +115,10 @@ async def update_strategy_params(
         raise HTTPException(status_code=404, detail="Strategy not found")
 
     # Deactivate previous versions for this scope
-    stmt = select(StrategyParam).where(StrategyParam.strategy_name == strategy_name)
+    stmt = select(StrategyParam).where(
+        StrategyParam.account_id.is_(None),
+        StrategyParam.strategy_name == strategy_name,
+    )
     if symbol:
         stmt = stmt.where(StrategyParam.symbol == symbol)
     else:

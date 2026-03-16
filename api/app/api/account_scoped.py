@@ -17,7 +17,7 @@ from app.brokers.base import (
     PortfolioHistory,
 )
 from app.core.database import get_db
-from app.domain.models import AccountWatchlist, LogEntry, Order, SignalLog, Symbol
+from app.domain.models import AccountWatchlist, LogEntry, Order, SignalLog, StrategyParam, Symbol
 from app.services.trading import TradingCoordinator
 
 router = APIRouter()
@@ -75,6 +75,10 @@ class SystemLogResponse(BaseModel):
 class WatchlistItem(BaseModel):
     symbol: str
     is_active: bool = True
+
+
+class StrategyParamsUpdateRequest(BaseModel):
+    params: dict
 
 
 def _get_coordinator(request: Request) -> TradingCoordinator:
@@ -264,6 +268,94 @@ async def remove_watchlist_item(account_id: UUID, symbol: str, db: AsyncSession 
     row.is_active = False
     await db.commit()
     return {"message": f"{sym} removed from account watchlist"}
+
+
+@router.get("/{account_id}/settings/strategies/{strategy_name}/params/active")
+async def get_active_strategy_params(
+    account_id: UUID,
+    strategy_name: str,
+    symbol: str | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    stmt = (
+        select(StrategyParam)
+        .where(StrategyParam.account_id == account_id)
+        .where(StrategyParam.strategy_name == strategy_name)
+        .where(StrategyParam.is_active == True)
+    )
+    if symbol:
+        stmt = stmt.where(StrategyParam.symbol == symbol)
+    else:
+        stmt = stmt.where(StrategyParam.symbol.is_(None))
+
+    row = (await db.execute(stmt.order_by(StrategyParam.version.desc()))).scalar_one_or_none()
+    if not row:
+        raise HTTPException(status_code=404, detail="No active params found")
+
+    return {
+        "strategy_name": row.strategy_name,
+        "account_id": str(account_id),
+        "version": row.version,
+        "symbol": row.symbol,
+        "params": row.params,
+    }
+
+
+@router.put("/{account_id}/settings/strategies/{strategy_name}/params")
+async def update_strategy_params(
+    account_id: UUID,
+    strategy_name: str,
+    req: StrategyParamsUpdateRequest,
+    symbol: str | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    stmt = (
+        select(StrategyParam)
+        .where(StrategyParam.account_id == account_id)
+        .where(StrategyParam.strategy_name == strategy_name)
+    )
+    if symbol:
+        stmt = stmt.where(StrategyParam.symbol == symbol)
+    else:
+        stmt = stmt.where(StrategyParam.symbol.is_(None))
+
+    latest = (await db.execute(stmt.order_by(StrategyParam.version.desc()))).scalar_one_or_none()
+    new_version = 1 if not latest else latest.version + 1
+
+    # deactivate existing active rows for same scope
+    active_stmt = (
+        select(StrategyParam)
+        .where(StrategyParam.account_id == account_id)
+        .where(StrategyParam.strategy_name == strategy_name)
+        .where(StrategyParam.is_active == True)
+    )
+    if symbol:
+        active_stmt = active_stmt.where(StrategyParam.symbol == symbol)
+    else:
+        active_stmt = active_stmt.where(StrategyParam.symbol.is_(None))
+    active_rows = (await db.execute(active_stmt)).scalars().all()
+    for r in active_rows:
+        r.is_active = False
+
+    new_row = StrategyParam(
+        account_id=account_id,
+        strategy_name=strategy_name,
+        symbol=symbol,
+        version=new_version,
+        params=req.params,
+        is_active=True,
+    )
+    db.add(new_row)
+    await db.commit()
+
+    return {
+        "strategy_name": new_row.strategy_name,
+        "account_id": str(account_id),
+        "version": new_row.version,
+        "symbol": new_row.symbol,
+        "params": new_row.params,
+        "message": f"Created version {new_row.version} for {'defaults' if not symbol else symbol}",
+    }
 
 
 @router.get("/{account_id}/logs/system", response_model=List[SystemLogResponse])

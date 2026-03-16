@@ -79,9 +79,13 @@ async def _ensure_accounts_in_db():
 
 
 async def _ensure_strategy_metadata_in_db():
-    """Seed strategy metadata/default params on fresh DBs."""
+    """Seed strategy metadata/default params on fresh DBs (account-scoped)."""
     all_strategies = get_all_strategies()
     async with AsyncSessionLocal() as db:
+        active_accounts = (
+            await db.execute(select(BrokerAccount).where(BrokerAccount.is_active == True))
+        ).scalars().all()
+
         for name, strategy in all_strategies.items():
             row = (
                 await db.execute(select(StrategyMeta).where(StrategyMeta.name == name))
@@ -95,17 +99,20 @@ async def _ensure_strategy_metadata_in_db():
                     )
                 )
 
-            active_default = (
+            # keep one global default row for backtest/settings global APIs
+            global_default = (
                 await db.execute(
                     select(StrategyParam)
+                    .where(StrategyParam.account_id.is_(None))
                     .where(StrategyParam.strategy_name == name)
                     .where(StrategyParam.symbol.is_(None))
                     .where(StrategyParam.is_active == True)
                 )
             ).scalar_one_or_none()
-            if not active_default:
+            if not global_default:
                 db.add(
                     StrategyParam(
+                        account_id=None,
                         strategy_name=name,
                         symbol=None,
                         version=1,
@@ -113,6 +120,28 @@ async def _ensure_strategy_metadata_in_db():
                         is_active=True,
                     )
                 )
+
+            for acct in active_accounts:
+                active_default = (
+                    await db.execute(
+                        select(StrategyParam)
+                        .where(StrategyParam.account_id == acct.id)
+                        .where(StrategyParam.strategy_name == name)
+                        .where(StrategyParam.symbol.is_(None))
+                        .where(StrategyParam.is_active == True)
+                    )
+                ).scalar_one_or_none()
+                if not active_default:
+                    db.add(
+                        StrategyParam(
+                            account_id=acct.id,
+                            strategy_name=name,
+                            symbol=None,
+                            version=1,
+                            params=getattr(strategy, "params", {}) or {},
+                            is_active=True,
+                        )
+                    )
 
         await db.commit()
 
@@ -182,6 +211,14 @@ async def _ensure_schema_compat():
         # Immutable account identity key for safe rename support.
         await conn.execute(
             text("ALTER TABLE broker_accounts ADD COLUMN IF NOT EXISTS external_id VARCHAR(100)")
+        )
+
+        # Account-scoped strategy params
+        await conn.execute(
+            text("ALTER TABLE strategy_params ADD COLUMN IF NOT EXISTS account_id UUID")
+        )
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_strategy_params_account_id ON strategy_params(account_id)")
         )
         await conn.execute(
             text("UPDATE broker_accounts SET external_id=name WHERE external_id IS NULL OR external_id='' ")
