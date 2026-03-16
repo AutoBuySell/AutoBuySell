@@ -70,6 +70,14 @@ class KISBroker(BrokerAdapter):
 
         # Fixed policy: regular session only, with per-symbol exchange mapping (NASDAQ/NYSE)
         self.us_exchange = config.get("us_exchange", "NASD")
+        self.us_exchanges = config.get("us_exchanges")
+        if isinstance(self.us_exchanges, str):
+            self.us_exchanges = [x.strip().upper() for x in self.us_exchanges.split(",") if x.strip()]
+        if not self.us_exchanges:
+            if str(self.us_exchange).upper() in {"ALL", "BOTH"}:
+                self.us_exchanges = ["NASD", "NYSE"]
+            else:
+                self.us_exchanges = [str(self.us_exchange).upper()]
         self.us_price_excd = config.get("us_price_excd", "NAS")
         self.us_currency = config.get("us_currency", "USD")
         self._nyse_symbols = {"HIMS", "NET", "NIO", "OKLO", "TDOC"}
@@ -173,6 +181,18 @@ class KISBroker(BrokerAdapter):
             return "NYSE", "NYS"
         return "NASD", "NAS"
 
+    def _iter_us_exchanges(self) -> list[str]:
+        # canonical, deduped order preserving
+        seen = set()
+        out = []
+        for ex in (self.us_exchanges or [self.us_exchange]):
+            e = str(ex).upper().strip()
+            if not e or e in seen:
+                continue
+            seen.add(e)
+            out.append(e)
+        return out or ["NASD"]
+
     async def _fetch_us_price(self, symbol: str) -> float:
         _, price_excd = self._exchange_codes_for_symbol(symbol)
         url = f"{self.base_url}/uapi/overseas-price/v1/quotations/price"
@@ -201,7 +221,7 @@ class KISBroker(BrokerAdapter):
         bal_params = {
             "CANO": self.cano,
             "ACNT_PRDT_CD": self.acnt_prdt_cd,
-            "OVRS_EXCG_CD": self.us_exchange,
+            "OVRS_EXCG_CD": self._iter_us_exchanges()[0],
             "TR_CRCY_CD": self.us_currency,
             "CTX_AREA_FK200": "",
             "CTX_AREA_NK200": "",
@@ -296,10 +316,8 @@ class KISBroker(BrokerAdapter):
             or cash
         )
 
-        # In KIS responses, `tot_evlu_pfls_amt` may represent evaluation P/L,
-        # and can be negative in paper mode even when account equity is healthy.
-        position_value_raw = float(bal_out2.get("tot_evlu_pfls_amt", 0) or 0)
-        position_value = position_value_raw if position_value_raw > 0 else 0.0
+        # Position valuation from per-exchange positions (covers NASD + NYSE if configured).
+        position_value = sum(float(p.market_value or 0.0) for p in (await self.get_positions()))
         cash = cash if cash > 0 else 0.0
         portfolio = position_value + cash
 
@@ -322,59 +340,60 @@ class KISBroker(BrokerAdapter):
     async def get_positions(self) -> List[BrokerPosition]:
         url = f"{self.base_url}/uapi/overseas-stock/v1/trading/inquire-balance"
         headers = await self._headers("VTTS3012R" if self.is_paper else "TTTS3012R")
-        params = {
-            "CANO": self.cano,
-            "ACNT_PRDT_CD": self.acnt_prdt_cd,
-            "OVRS_EXCG_CD": self.us_exchange,
-            "TR_CRCY_CD": self.us_currency,
-            "CTX_AREA_FK200": "",
-            "CTX_AREA_NK200": "",
-        }
+
+        merged: dict[str, BrokerPosition] = {}
 
         async with httpx.AsyncClient(timeout=15.0) as client:
-            resp, data = await self._request_with_retry(
-                client, "GET", url, headers=headers, params=params, attempts=4
-            )
-            if resp.status_code >= 400:
-                raise RuntimeError(
-                    f"KIS positions query failed: status={resp.status_code}, body={data}"
+            for exch in self._iter_us_exchanges():
+                params = {
+                    "CANO": self.cano,
+                    "ACNT_PRDT_CD": self.acnt_prdt_cd,
+                    "OVRS_EXCG_CD": exch,
+                    "TR_CRCY_CD": self.us_currency,
+                    "CTX_AREA_FK200": "",
+                    "CTX_AREA_NK200": "",
+                }
+                resp, data = await self._request_with_retry(
+                    client, "GET", url, headers=headers, params=params, attempts=4
                 )
+                if resp.status_code >= 400:
+                    continue
 
-        positions: List[BrokerPosition] = []
-        for row in data.get("output1", []):
-            qty = float(row.get("ovrs_cblc_qty", 0) or 0)
-            if qty <= 0:
-                continue
+                for row in data.get("output1", []):
+                    qty = float(row.get("ovrs_cblc_qty", 0) or 0)
+                    if qty <= 0:
+                        continue
 
-            symbol = str(row.get("ovrs_pdno", ""))
-            avg_price = float(row.get("pchs_avg_pric", 0) or 0)
-            cur_price = float(row.get("now_pric2", 0) or 0)
-            if cur_price <= 0 and symbol:
-                try:
-                    cur_price = await self._fetch_us_price(symbol)
-                except Exception:
-                    cur_price = 0
+                    symbol = str(row.get("ovrs_pdno", ""))
+                    if not symbol:
+                        continue
+                    avg_price = float(row.get("pchs_avg_pric", 0) or 0)
+                    cur_price = float(row.get("now_pric2", 0) or 0)
+                    if cur_price <= 0 and symbol:
+                        try:
+                            cur_price = await self._fetch_us_price(symbol)
+                        except Exception:
+                            cur_price = 0
 
-            market_value = float(
-                row.get("frcr_evlu_amt2", qty * cur_price) or qty * cur_price
-            )
-            unrealized_pl = float(row.get("evlu_pfls_amt2", 0) or 0)
-            base = qty * avg_price if avg_price > 0 else 0
-            unrealized_plpc = (unrealized_pl / base) if base > 0 else 0.0
+                    market_value = float(
+                        row.get("frcr_evlu_amt2", qty * cur_price) or qty * cur_price
+                    )
+                    unrealized_pl = float(row.get("evlu_pfls_amt2", 0) or 0)
+                    base = qty * avg_price if avg_price > 0 else 0
+                    unrealized_plpc = (unrealized_pl / base) if base > 0 else 0.0
 
-            positions.append(
-                BrokerPosition(
-                    symbol=symbol,
-                    qty=qty,
-                    avg_entry_price=avg_price,
-                    current_price=cur_price,
-                    market_value=market_value,
-                    unrealized_pl=unrealized_pl,
-                    unrealized_plpc=unrealized_plpc,
-                    side="long",
-                )
-            )
-        return positions
+                    merged[symbol] = BrokerPosition(
+                        symbol=symbol,
+                        qty=qty,
+                        avg_entry_price=avg_price,
+                        current_price=cur_price,
+                        market_value=market_value,
+                        unrealized_pl=unrealized_pl,
+                        unrealized_plpc=unrealized_plpc,
+                        side="long",
+                    )
+
+        return list(merged.values())
 
     async def submit_order(self, order: OrderRequest) -> OrderResult:
         # US overseas order endpoint

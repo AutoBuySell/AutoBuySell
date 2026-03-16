@@ -1,0 +1,355 @@
+from __future__ import annotations
+
+import asyncio
+from datetime import datetime, timedelta, timezone, time as dtime
+from zoneinfo import ZoneInfo
+from typing import List, Optional
+
+import httpx
+
+from app.brokers.base import (
+    AccountInfo,
+    BrokerPosition,
+    OrderRequest,
+    OrderResult,
+    PortfolioHistory,
+    TradeFill,
+)
+
+
+class KISKRBroker:
+    """KIS Domestic (KRX) broker adapter (paper/live)."""
+
+    def __init__(
+        self,
+        app_key: Optional[str] = None,
+        app_secret: Optional[str] = None,
+        cano: Optional[str] = None,
+        acnt_prdt_cd: Optional[str] = None,
+        base_url: Optional[str] = None,
+        is_paper: Optional[bool] = None,
+        **config,
+    ):
+        self.base_url = (base_url or "https://openapi.koreainvestment.com:9443").rstrip("/")
+        self.app_key = app_key
+        self.app_secret = app_secret
+        self.cano = cano
+        self.acnt_prdt_cd = acnt_prdt_cd
+        self.is_paper = is_paper if is_paper is not None else True
+
+        if not all([self.app_key, self.app_secret, self.cano, self.acnt_prdt_cd]):
+            raise ValueError("KISKR configuration missing app_key/app_secret/cano/acnt_prdt_cd")
+
+        self.currency = "KRW"
+        self.market = str(config.get("market", "KRX")).upper()
+
+        self._access_token: Optional[str] = None
+        self._token_expires_at: Optional[datetime] = None
+        self._request_lock = asyncio.Lock()
+        self._last_request_at: Optional[datetime] = None
+        self._min_request_interval_sec = 0.35
+
+    async def get_name(self) -> str:
+        return "KIS OpenAPI (KR)"
+
+    async def _ensure_token(self) -> str:
+        now = datetime.now(timezone.utc)
+        if self._access_token and self._token_expires_at and self._token_expires_at > now:
+            return self._access_token
+
+        url = f"{self.base_url}/oauth2/tokenP"
+        payload = {
+            "grant_type": "client_credentials",
+            "appkey": self.app_key,
+            "appsecret": self.app_secret,
+        }
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(url, json=payload)
+            resp.raise_for_status()
+            data = resp.json()
+
+        token = data.get("access_token")
+        if not token:
+            raise RuntimeError(f"KISKR token response missing access_token: {data}")
+
+        expires_in = int(data.get("expires_in", 3600))
+        self._access_token = token
+        self._token_expires_at = now + timedelta(seconds=max(expires_in - 60, 60))
+        return token
+
+    async def _headers(self, tr_id: str) -> dict:
+        token = await self._ensure_token()
+        return {
+            "authorization": f"Bearer {token}",
+            "appkey": self.app_key,
+            "appsecret": self.app_secret,
+            "tr_id": tr_id,
+            "content-type": "application/json; charset=utf-8",
+        }
+
+    async def _request_with_retry(
+        self,
+        client: httpx.AsyncClient,
+        method: str,
+        url: str,
+        headers: dict,
+        params: Optional[dict] = None,
+        json: Optional[dict] = None,
+        attempts: int = 3,
+    ) -> tuple[httpx.Response, dict]:
+        last_resp = None
+        last_data = {}
+        for i in range(attempts):
+            async with self._request_lock:
+                if self._last_request_at is not None:
+                    elapsed = (datetime.now(timezone.utc) - self._last_request_at).total_seconds()
+                    if elapsed < self._min_request_interval_sec:
+                        await asyncio.sleep(self._min_request_interval_sec - elapsed)
+                resp = await client.request(method, url, headers=headers, params=params, json=json)
+                self._last_request_at = datetime.now(timezone.utc)
+
+            data = resp.json() if resp.text else {}
+            last_resp, last_data = resp, data
+            if resp.status_code >= 500 and i < attempts - 1:
+                await asyncio.sleep(1.2 * (i + 1))
+                continue
+            return resp, data
+
+        return last_resp, last_data
+
+    async def _fetch_kr_price(self, symbol: str) -> float:
+        url = f"{self.base_url}/uapi/domestic-stock/v1/quotations/inquire-price"
+        headers = await self._headers("FHKST01010100")
+        params = {
+            "FID_COND_MRKT_DIV_CODE": "J",
+            "FID_INPUT_ISCD": symbol,
+        }
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(url, params=params, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+        out = data.get("output") or {}
+        return float(out.get("stck_prpr", 0) or 0)
+
+    async def get_account_info(self) -> AccountInfo:
+        positions = await self.get_positions()
+        position_value = sum(float(p.market_value or 0.0) for p in positions)
+
+        url = f"{self.base_url}/uapi/domestic-stock/v1/trading/inquire-psbl-order"
+        headers = await self._headers("VTTC8908R" if self.is_paper else "TTTC8908R")
+        params = {
+            "CANO": self.cano,
+            "ACNT_PRDT_CD": self.acnt_prdt_cd,
+            "PDNO": "005930",  # probe symbol (Samsung)
+            "ORD_UNPR": "1",
+            "ORD_DVSN": "01",
+            "CMA_EVLU_AMT_ICLD_YN": "N",
+            "OVRS_ICLD_YN": "N",
+        }
+
+        cash = 0.0
+        buying_power = 0.0
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp, data = await self._request_with_retry(client, "GET", url, headers=headers, params=params)
+            if resp.status_code < 400:
+                out = data.get("output") or {}
+                cash = float(out.get("ord_psbl_cash", 0) or out.get("dnca_tot_amt", 0) or 0)
+                buying_power = float(out.get("ord_psbl_cash", 0) or 0)
+        except Exception:
+            pass
+
+        portfolio = (cash if cash > 0 else 0.0) + position_value
+        if portfolio <= 0 and buying_power > 0:
+            portfolio = buying_power
+            cash = max(cash, buying_power)
+
+        return AccountInfo(
+            account_id=f"{self.cano}-{self.acnt_prdt_cd}",
+            currency=self.currency,
+            cash=float(max(cash, 0.0)),
+            portfolio_value=float(max(portfolio, 0.0)),
+            buying_power=float(max(buying_power, 0.0)),
+            is_paper=self.is_paper,
+        )
+
+    async def get_positions(self) -> List[BrokerPosition]:
+        url = f"{self.base_url}/uapi/domestic-stock/v1/trading/inquire-balance"
+        headers = await self._headers("VTTC8434R" if self.is_paper else "TTTC8434R")
+        params = {
+            "CANO": self.cano,
+            "ACNT_PRDT_CD": self.acnt_prdt_cd,
+            "AFHR_FLPR_YN": "N",
+            "OFL_YN": "",
+            "INQR_DVSN": "02",
+            "UNPR_DVSN": "01",
+            "FUND_STTL_ICLD_YN": "N",
+            "FNCG_AMT_AUTO_RDPT_YN": "N",
+            "PRCS_DVSN": "01",
+            "CTX_AREA_FK100": "",
+            "CTX_AREA_NK100": "",
+        }
+
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp, data = await self._request_with_retry(client, "GET", url, headers=headers, params=params, attempts=4)
+            if resp.status_code >= 400:
+                return []
+
+        positions: List[BrokerPosition] = []
+        for row in data.get("output1", []):
+            qty = float(row.get("hldg_qty", 0) or row.get("dnca_tot_qty", 0) or 0)
+            if qty <= 0:
+                continue
+            symbol = str(row.get("pdno", "") or "")
+            avg_price = float(row.get("pchs_avg_pric", 0) or 0)
+            cur_price = float(row.get("prpr", 0) or 0)
+            if cur_price <= 0 and symbol:
+                try:
+                    cur_price = await self._fetch_kr_price(symbol)
+                except Exception:
+                    cur_price = 0
+            market_value = float(row.get("evlu_amt", qty * cur_price) or qty * cur_price)
+            unrealized_pl = float(row.get("evlu_pfls_amt", 0) or 0)
+            base = qty * avg_price if avg_price > 0 else 0
+            unrealized_plpc = (unrealized_pl / base) if base > 0 else 0.0
+            positions.append(
+                BrokerPosition(
+                    symbol=symbol,
+                    qty=qty,
+                    avg_entry_price=avg_price,
+                    current_price=cur_price,
+                    market_value=market_value,
+                    unrealized_pl=unrealized_pl,
+                    unrealized_plpc=unrealized_plpc,
+                    side="long",
+                )
+            )
+        return positions
+
+    async def submit_order(self, order: OrderRequest) -> OrderResult:
+        is_buy = order.side.lower() == "buy"
+        tr_id = (
+            ("VTTC0802U" if is_buy else "VTTC0801U")
+            if self.is_paper
+            else ("TTTC0802U" if is_buy else "TTTC0801U")
+        )
+        url = f"{self.base_url}/uapi/domestic-stock/v1/trading/order-cash"
+        headers = await self._headers(tr_id)
+
+        order_type = "01" if order.type.lower() == "limit" else "01"  # keep limit-compatible for safety
+        price = order.limit_price or await self._fetch_kr_price(order.symbol)
+        payload = {
+            "CANO": self.cano,
+            "ACNT_PRDT_CD": self.acnt_prdt_cd,
+            "PDNO": order.symbol,
+            "ORD_DVSN": order_type,
+            "ORD_QTY": str(int(order.qty)),
+            "ORD_UNPR": str(int(price)),
+        }
+
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp, data = await self._request_with_retry(client, "POST", url, headers=headers, json=payload)
+            if resp.status_code >= 400:
+                raise RuntimeError(f"KISKR order failed: status={resp.status_code}, body={data}")
+            if str((data or {}).get("rt_cd", "")) not in {"", "0"}:
+                raise RuntimeError(f"KISKR order rejected: {data}")
+
+        out = data.get("output") or {}
+        ord_no = str(out.get("ODNO", "") or out.get("odno", ""))
+        return OrderResult(
+            client_order_id=ord_no or f"kiskr-{datetime.now().timestamp()}",
+            broker_order_id=ord_no,
+            status="accepted",
+            symbol=order.symbol,
+            qty=order.qty,
+        )
+
+    async def cancel_order(self, order_id: str) -> bool:
+        # Kept as best-effort placeholder for initial KRX test phase.
+        return False
+
+    async def get_market_status(self) -> bool:
+        now_kst = datetime.now(timezone.utc).astimezone(ZoneInfo("Asia/Seoul"))
+        if now_kst.weekday() >= 5:
+            return False
+        return dtime(9, 0) <= now_kst.time() <= dtime(15, 30)
+
+    async def get_portfolio_history(self, period: str = "1M", timeframe: str = "1D") -> PortfolioHistory:
+        account = await self.get_account_info()
+        tf = timeframe.upper()
+        period_key = period.upper()
+
+        period_points = {"1D": 24, "5D": 40, "1W": 40, "1M": 30, "3M": 60, "6M": 120, "1A": 180, "1Y": 180}
+        points = period_points.get(period_key, 30)
+        step_map = {"1MIN": 60, "5MIN": 300, "15MIN": 900, "30MIN": 1800, "1H": 3600, "1D": 86400}
+        step = step_map.get(tf, 86400)
+
+        now = int(datetime.now(timezone.utc).timestamp())
+        start = now - step * (points - 1)
+        ts = [start + i * step for i in range(points)]
+
+        equity = [float(account.portfolio_value or 0.0) for _ in range(points)]
+        pnl = [0.0 for _ in range(points)]
+        pnl_pct = [0.0 for _ in range(points)]
+        return PortfolioHistory(timestamp=ts, equity=equity, profit_loss=pnl, profit_loss_pct=pnl_pct, timeframe=timeframe)
+
+    async def get_trade_fills(self, limit: int = 100) -> List[TradeFill]:
+        url = f"{self.base_url}/uapi/domestic-stock/v1/trading/inquire-daily-ccld"
+        headers = await self._headers("VTTC8001R" if self.is_paper else "TTTC8001R")
+
+        kst = ZoneInfo("Asia/Seoul")
+        today = datetime.now(kst).date().strftime("%Y%m%d")
+        params = {
+            "CANO": self.cano,
+            "ACNT_PRDT_CD": self.acnt_prdt_cd,
+            "INQR_STRT_DT": today,
+            "INQR_END_DT": today,
+            "SLL_BUY_DVSN_CD": "00",
+            "INQR_DVSN": "00",
+            "PDNO": "",
+            "CCLD_DVSN": "00",
+            "ORD_GNO_BRNO": "",
+            "ODNO": "",
+            "INQR_DVSN_3": "00",
+            "INQR_DVSN_1": "",
+            "CTX_AREA_FK100": "",
+            "CTX_AREA_NK100": "",
+        }
+
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp, data = await self._request_with_retry(client, "GET", url, headers=headers, params=params)
+            if resp.status_code >= 400:
+                return []
+            if str((data or {}).get("rt_cd", "0")) not in {"", "0"}:
+                return []
+
+        fills: List[TradeFill] = []
+        rows = (data or {}).get("output1") or []
+        for row in rows[:limit]:
+            qty = float(row.get("tot_ccld_qty", 0) or row.get("ccld_qty", 0) or 0)
+            if qty <= 0:
+                continue
+            symbol = str(row.get("pdno", "") or "")
+            ord_no = str(row.get("odno", "") or "")
+            ccld_no = str(row.get("ccld_no", "") or "")
+            side = "buy" if str(row.get("sll_buy_dvsn_cd", "2")) in {"02", "2"} else "sell"
+            price = float(row.get("avg_prvs", 0) or row.get("ord_unpr", 0) or 0)
+            dt = str(row.get("ord_dt", today) or today)
+            tm = str(row.get("ord_tmd", "000000") or "000000").zfill(6)
+            try:
+                executed_at = datetime.strptime(f"{dt}{tm}", "%Y%m%d%H%M%S").replace(tzinfo=kst).astimezone(timezone.utc)
+            except Exception:
+                executed_at = datetime.now(timezone.utc)
+            fills.append(
+                TradeFill(
+                    execution_id=ccld_no or f"{ord_no}-{symbol}-{dt}{tm}",
+                    order_id=ord_no or None,
+                    symbol=symbol,
+                    side=side,
+                    qty=qty,
+                    price=price,
+                    commission=0.0,
+                    executed_at=executed_at,
+                )
+            )
+        return fills

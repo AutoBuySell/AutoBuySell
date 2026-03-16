@@ -1,5 +1,6 @@
 from app.brokers.alpaca import AlpacaBroker
 from app.brokers.kis import KISBroker
+from app.brokers.kis_kr import KISKRBroker
 from app.brokers.base import BrokerAdapter
 from app.domain.models import BrokerAccount
 
@@ -25,8 +26,19 @@ def create_broker_for_account(account: BrokerAccount) -> BrokerAdapter:
             base_url=config.get("base_url"),
             is_paper=config.get("is_paper", True),
             us_exchange=config.get("us_exchange", "NASD"),
+            us_exchanges=config.get("us_exchanges"),
             us_price_excd=config.get("us_price_excd", "NAS"),
             us_currency=config.get("us_currency", "USD"),
+        )
+    elif broker_type == "kis_kr":
+        return KISKRBroker(
+            app_key=creds.get("app_key"),
+            app_secret=creds.get("app_secret"),
+            cano=creds.get("cano"),
+            acnt_prdt_cd=creds.get("acnt_prdt_cd"),
+            base_url=config.get("base_url"),
+            is_paper=config.get("is_paper", True),
+            market=config.get("market", "KRX"),
         )
     else:
         raise ValueError(f"Unsupported broker_type: {account.broker_type}")
