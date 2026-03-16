@@ -665,7 +665,8 @@ class KISBroker(BrokerAdapter):
         tr_id = "VTTS3035R" if self.is_paper else "TTTS3035R"
 
         kst_today = datetime.now(ZoneInfo("Asia/Seoul")).date()
-        start_date = kst_today - timedelta(days=180)
+        # Sync window default: last 30 days (lighter periodic sync load)
+        start_date = kst_today - timedelta(days=30)
 
         def parse_rows(rows: list[dict], end_dt_str: str) -> List[TradeFill]:
             parsed: List[TradeFill] = []
