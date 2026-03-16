@@ -172,6 +172,19 @@ export const accountsApi = {
   }
 };
 
+export const watchlistApi = {
+    list: async (accountId: string) => {
+        const { data } = await apiClient.get<{symbol: string, is_active: boolean}[]>(`/accounts/${accountId}/watchlist`);
+        return data;
+    },
+    add: async (accountId: string, symbol: string) => {
+        await apiClient.post(`/accounts/${accountId}/watchlist`, { symbol, is_active: true });
+    },
+    remove: async (accountId: string, symbol: string) => {
+        await apiClient.delete(`/accounts/${accountId}/watchlist/${symbol}`);
+    },
+};
+
 export const dataApi = {
     getSymbols: async (activeOnly: boolean = true) => {
         const { data } = await apiClient.get<SymbolInfo[]>('/data/symbols', { params: { active_only: activeOnly } });

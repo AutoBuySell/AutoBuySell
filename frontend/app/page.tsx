@@ -218,8 +218,8 @@ export default function Home() {
         </div>
       )}
 
-      {activeTab === 'watchlist' && <SymbolManager />}
-      {activeTab === 'settings' && <SettingsPanel />}
+      {activeTab === 'watchlist' && <SymbolManager accountId={selectedAccountId} />}
+      {activeTab === 'settings' && <SettingsPanel accountId={selectedAccountId} />}
     </div>
   );
 }

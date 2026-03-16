@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import { statisticsApi, dataApi, tradingApi } from '@/lib/api';
+import { statisticsApi, tradingApi, watchlistApi } from '@/lib/api';
 import { 
     LineChart, Line, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer 
 } from 'recharts';
@@ -29,10 +29,10 @@ export default function EachEquityPerformance({ accountId }: { accountId?: strin
     const loadSymbols = async () => {
         try {
             const [watchlistSymbols, positions] = await Promise.all([
-                dataApi.getSymbols(true),
+                accountId ? watchlistApi.list(accountId) : Promise.resolve([]),
                 accountId ? tradingApi.getPositions(accountId) : Promise.resolve([]),
             ]);
-            const watchlistTickers = watchlistSymbols.map((s: any) => s.ticker);
+            const watchlistTickers = (watchlistSymbols || []).filter((s: any) => s.is_active).map((s: any) => s.symbol);
             const positionTickers = (positions || []).map((p: any) => p.symbol).filter(Boolean);
             const tickers = Array.from(new Set([...watchlistTickers, ...positionTickers])).sort();
 

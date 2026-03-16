@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
-import { dataApi } from '@/lib/api';
+import { dataApi, watchlistApi } from '@/lib/api';
 
 interface SymbolInfo {
     ticker: string;
@@ -11,7 +11,7 @@ interface SymbolInfo {
     is_active: boolean;
 }
 
-export default function SymbolManager() {
+export default function SymbolManager({ accountId }: { accountId?: string }) {
     const [symbols, setSymbols] = useState<SymbolInfo[]>([]);
     const [newTicker, setNewTicker] = useState('');
     const [loading, setLoading] = useState(false);
@@ -25,12 +25,21 @@ export default function SymbolManager() {
 
     useEffect(() => {
         fetchSymbols();
-    }, []);
+    }, [accountId]);
 
     const fetchSymbols = async () => {
         try {
-            const data = await dataApi.getSymbols(false);
-            setSymbols(data);
+            if (!accountId) {
+                setSymbols([]);
+                return;
+            }
+            const [master, wl] = await Promise.all([
+                dataApi.getSymbols(false),
+                watchlistApi.list(accountId),
+            ]);
+            const active = new Set((wl || []).filter(w => w.is_active).map(w => w.symbol.toUpperCase()));
+            const merged = master.map(s => ({ ...s, is_active: active.has(s.ticker.toUpperCase()) }));
+            setSymbols(merged);
         } catch (e) {
             console.error('Failed to fetch symbols', e);
         }
@@ -40,7 +49,9 @@ export default function SymbolManager() {
         if (!newTicker.trim()) return;
         setLoading(true);
         try {
+            if (!accountId) return;
             await dataApi.addSymbol({ ticker: newTicker.toUpperCase() });
+            await watchlistApi.add(accountId, newTicker.toUpperCase());
             setNewTicker('');
             await fetchSymbols();
         } catch (e) {
@@ -52,10 +63,12 @@ export default function SymbolManager() {
 
     const toggleActive = async (ticker: string, currentActive: boolean) => {
         try {
+            if (!accountId) return;
             if (currentActive) {
-                await dataApi.deactivateSymbol(ticker);
+                await watchlistApi.remove(accountId, ticker);
             } else {
                 await dataApi.addSymbol({ ticker });
+                await watchlistApi.add(accountId, ticker);
             }
             await fetchSymbols();
         } catch (e) {
