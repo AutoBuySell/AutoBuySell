@@ -15,7 +15,7 @@ export default function Home() {
   const [account, setAccount] = useState<AccountInfo | null>(null);
   const [positions, setPositions] = useState<Position[]>([]);
   const [status, setStatus] = useState<any>(null);
-  const [selectedAccountId] = useSelectedAccountId();
+  const [selectedAccountId, setSelectedAccountId] = useSelectedAccountId();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -31,9 +31,14 @@ export default function Home() {
         const effectiveAccountId = accountId || selectedAccountId;
 
         if (!effectiveAccountId) {
+          // Initial app entry can race before account scope is hydrated.
+          // Auto-pick first active account and wait for next effect cycle.
+          if (accountsData && accountsData.length > 0) {
+            setSelectedAccountId(accountsData[0].id);
+          }
           setAccount(null);
           setPositions([]);
-          setError('No active account available');
+          setError(null);
           return;
         }
 
