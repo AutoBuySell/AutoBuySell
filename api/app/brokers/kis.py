@@ -288,10 +288,6 @@ class KISBroker(BrokerAdapter):
             or 0
         )
 
-        # Equity in USD: use position valuation + cash (avoid KRW-converted total fields).
-        position_value = float(bal_out2.get("tot_evlu_pfls_amt", 0) or 0)
-        portfolio = position_value + cash
-
         buying_power = float(
             ord_out.get("ovrs_ord_psbl_amt", 0)
             or ord_out.get("ord_psbl_frcr_amt", 0)
@@ -299,6 +295,20 @@ class KISBroker(BrokerAdapter):
             or bal_out2.get("ovrs_ord_psbl_amt", 0)
             or cash
         )
+
+        # In KIS responses, `tot_evlu_pfls_amt` may represent evaluation P/L,
+        # and can be negative in paper mode even when account equity is healthy.
+        position_value_raw = float(bal_out2.get("tot_evlu_pfls_amt", 0) or 0)
+        position_value = position_value_raw if position_value_raw > 0 else 0.0
+        cash = cash if cash > 0 else 0.0
+        portfolio = position_value + cash
+
+        # Safety fallback: prevent clearly invalid negative/zero equity display
+        # when buying power is available (common in paper accounts).
+        if portfolio <= 0 and buying_power > 0:
+            portfolio = buying_power
+            if cash <= 0 and position_value <= 0:
+                cash = buying_power
 
         return AccountInfo(
             account_id=f"{self.cano}-{self.acnt_prdt_cd}",
