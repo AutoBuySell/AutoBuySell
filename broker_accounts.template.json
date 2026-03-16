@@ -15,7 +15,11 @@
       "us_exchange": "NASD",
       "us_price_excd": "NAS",
       "us_currency": "USD",
-      "description": "KIS 실전계좌 #1 (예: US swing / conservative)"
+      "description": "KIS 실전계좌 #1 (예: US swing / conservative)",
+      "us_exchanges": [
+        "NASD",
+        "NYSE"
+      ]
     }
   },
   {
@@ -34,7 +38,11 @@
       "us_exchange": "NASD",
       "us_price_excd": "NAS",
       "us_currency": "USD",
-      "description": "KIS 모의계좌 #1 (전략 검증용)"
+      "description": "KIS 모의계좌 #1 (전략 검증용)",
+      "us_exchanges": [
+        "NASD",
+        "NYSE"
+      ]
     }
   },
   {

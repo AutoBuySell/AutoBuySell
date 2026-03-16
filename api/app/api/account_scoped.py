@@ -166,7 +166,10 @@ async def manual_order(account_id: UUID, order: OrderRequest, request: Request):
         type=order.type,
         limit_price=order.limit_price,
     )
-    return await coordinator.broker_manager.get(account_id).submit_order(req)
+    try:
+        return await coordinator.broker_manager.get(account_id).submit_order(req)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Order failed: {e}")
 
 
 @router.get("/{account_id}/logs/trades", response_model=List[TradeLogResponse])
