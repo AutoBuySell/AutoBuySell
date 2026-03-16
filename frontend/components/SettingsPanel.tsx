@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
-import { backtestApi } from '@/lib/api';
+import { backtestApi, watchlistApi } from '@/lib/api';
 
 interface StrategyMeta {
     name: string;
@@ -14,7 +14,7 @@ interface StrategyParams {
     [key: string]: any;
 }
 
-export default function SettingsPanel() {
+export default function SettingsPanel({ accountId }: { accountId?: string }) {
     const [strategies, setStrategies] = useState<StrategyMeta[]>([]);
     const [selectedStrategy, setSelectedStrategy] = useState<string>('');
     
@@ -29,7 +29,7 @@ export default function SettingsPanel() {
     useEffect(() => {
         fetchStrategies();
         fetchSymbols();
-    }, []);
+    }, [accountId]);
     
     useEffect(() => {
         if (selectedStrategy) {
@@ -51,11 +51,12 @@ export default function SettingsPanel() {
     
     const fetchSymbols = async () => {
         try {
-            // Using dataApi directly here logic? or import? 
-            // We need to import dataApi. Assume it is available in ../lib/api
-            const { dataApi } = require('@/lib/api'); // Dynamic import hack or fix import
-            const syms = await dataApi.getSymbols(true);
-            setSymbols(syms.map((s: any) => s.ticker));
+            if (!accountId) {
+                setSymbols([]);
+                return;
+            }
+            const syms = await watchlistApi.list(accountId);
+            setSymbols((syms || []).filter((s: any) => s.is_active).map((s: any) => s.symbol));
         } catch (e) {
             console.error('Failed to fetch symbols', e);
         }
