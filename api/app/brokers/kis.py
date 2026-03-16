@@ -655,91 +655,134 @@ class KISBroker(BrokerAdapter):
         )
 
     async def get_trade_fills(self, limit: int = 100) -> List[TradeFill]:
+        """
+        Safe continuous KIS fills fetch:
+        - fixed interval (5s)
+        - derive next window from latest ord_dt
+        - stop on empty/no-forward-progress/failure
+        """
         url = f"{self.base_url}/uapi/overseas-stock/v1/trading/inquire-ccnl"
         tr_id = "VTTS3035R" if self.is_paper else "TTTS3035R"
-        headers = await self._headers(tr_id)
 
-        today = datetime.now()
-        start_dt = (today - timedelta(days=180)).strftime("%Y%m%d")
-        end_dt = today.strftime("%Y%m%d")
-        params = {
-            "CANO": self.cano,
-            "ACNT_PRDT_CD": self.acnt_prdt_cd,
-            "PDNO": "",
-            "ORD_STRT_DT": start_dt,
-            "ORD_END_DT": end_dt,
-            "SLL_BUY_DVSN": "00",
-            "CCLD_NCCS_DVSN": "00",  # demo only supports 00
-            "OVRS_EXCG_CD": "",
-            "SORT_SQN": "DS",
-            "ORD_DT": "",
-            "ORD_GNO_BRNO": "",
-            "ODNO": "",
-            "CTX_AREA_NK200": "",
-            "CTX_AREA_FK200": "",
-        }
+        kst_today = datetime.now(ZoneInfo("Asia/Seoul")).date()
+        start_date = kst_today - timedelta(days=180)
+
+        def parse_rows(rows: list[dict], end_dt_str: str) -> List[TradeFill]:
+            parsed: List[TradeFill] = []
+            for row in rows:
+                ccld_qty = float(row.get("ft_ccld_qty", 0) or 0)
+                if ccld_qty <= 0:
+                    continue
+
+                ord_no = str(row.get("odno", "") or "")
+                ccld_no = str(row.get("ovrs_ccld_no", "") or "")
+                sym = str(
+                    row.get("ovrs_pdno")
+                    or row.get("pdno")
+                    or row.get("ovrs_pd_name")
+                    or row.get("ovrs_item_name")
+                    or row.get("pd_name")
+                    or row.get("item_name")
+                    or row.get("prdt_name")
+                    or ""
+                )
+
+                side_code = str(row.get("sll_buy_dvsn_cd", "") or "").strip()
+                side_name = str(row.get("sll_buy_dvsn_name", "") or "").lower()
+                if side_code == "02" or "매수" in side_name or side_name == "buy":
+                    side = "buy"
+                elif side_code == "01" or "매도" in side_name or side_name == "sell":
+                    side = "sell"
+                else:
+                    side = "buy"
+
+                price = float(
+                    row.get("ft_ccld_unpr3", 0) or row.get("ft_ord_unpr3", 0) or 0
+                )
+
+                ord_dt = str(row.get("ord_dt", "") or end_dt_str)
+                ord_tm = str(row.get("ord_tmd", "") or "000000").zfill(6)
+                try:
+                    executed_local = datetime.strptime(
+                        f"{ord_dt}{ord_tm}", "%Y%m%d%H%M%S"
+                    ).replace(tzinfo=ZoneInfo("Asia/Seoul"))
+                    executed_at = executed_local.astimezone(timezone.utc)
+                except Exception:
+                    executed_at = datetime.now(timezone.utc)
+
+                parsed.append(
+                    TradeFill(
+                        execution_id=ccld_no or f"{ord_no}-{sym}-{ord_dt}{ord_tm}",
+                        order_id=ord_no or None,
+                        symbol=sym,
+                        side=side,
+                        qty=ccld_qty,
+                        price=price,
+                        commission=0.0,
+                        executed_at=executed_at,
+                    )
+                )
+            return parsed
+
+        fills: List[TradeFill] = []
+        seen_execution_ids: set[str] = set()
 
         async with httpx.AsyncClient(timeout=20.0) as client:
-            resp, data = await self._request_with_retry(
-                client, "GET", url, headers=headers, params=params
-            )
-            if resp.status_code >= 400:
-                return []
+            while len(fills) < limit:
+                headers = await self._headers(tr_id)
+                end_dt = kst_today.strftime("%Y%m%d")
+                params = {
+                    "CANO": self.cano,
+                    "ACNT_PRDT_CD": self.acnt_prdt_cd,
+                    "PDNO": "",
+                    "ORD_STRT_DT": start_date.strftime("%Y%m%d"),
+                    "ORD_END_DT": end_dt,
+                    "SLL_BUY_DVSN": "00",
+                    "CCLD_NCCS_DVSN": "00",
+                    "OVRS_EXCG_CD": "",
+                    "SORT_SQN": "DS",
+                    "ORD_DT": "",
+                    "ORD_GNO_BRNO": "",
+                    "ODNO": "",
+                    "CTX_AREA_NK200": "",
+                    "CTX_AREA_FK200": "",
+                }
 
-        rows = data.get("output") or []
-        fills: List[TradeFill] = []
-        for row in rows[:limit]:
-            ccld_qty = float(row.get("ft_ccld_qty", 0) or 0)
-            if ccld_qty <= 0:
-                continue
-            ord_no = str(row.get("odno", "") or "")
-            ccld_no = str(row.get("ovrs_ccld_no", "") or "")
-            sym = str(
-                row.get("ovrs_pdno")
-                or row.get("pdno")
-                or row.get("ovrs_pd_name")
-                or row.get("ovrs_item_name")
-                or row.get("pd_name")
-                or row.get("item_name")
-                or row.get("prdt_name")
-                or ""
-            )
-
-            side_code = str(row.get("sll_buy_dvsn_cd", "") or "").strip()
-            side_name = str(row.get("sll_buy_dvsn_name", "") or "").lower()
-            if side_code == "02" or "매수" in side_name or side_name == "buy":
-                side = "buy"
-            elif side_code == "01" or "매도" in side_name or side_name == "sell":
-                side = "sell"
-            else:
-                side = "buy"
-
-            price = float(
-                row.get("ft_ccld_unpr3", 0) or row.get("ft_ord_unpr3", 0) or 0
-            )
-
-            # timestamp parse: KIS date/time fields are usually in Korea local time
-            ord_dt = str(row.get("ord_dt", "") or end_dt)
-            ord_tm = str(row.get("ord_tmd", "") or "000000").zfill(6)
-            try:
-                executed_local = datetime.strptime(
-                    f"{ord_dt}{ord_tm}", "%Y%m%d%H%M%S"
-                ).replace(tzinfo=ZoneInfo("Asia/Seoul"))
-                executed_at = executed_local.astimezone(timezone.utc)
-            except Exception:
-                executed_at = datetime.now(timezone.utc)
-
-            fills.append(
-                TradeFill(
-                    execution_id=ccld_no or f"{ord_no}-{sym}-{ord_dt}{ord_tm}",
-                    order_id=ord_no or None,
-                    symbol=sym,
-                    side=side,
-                    qty=ccld_qty,
-                    price=price,
-                    commission=0.0,
-                    executed_at=executed_at,
+                resp, data = await self._request_with_retry(
+                    client, "GET", url, headers=headers, params=params
                 )
-            )
+                if resp.status_code >= 400:
+                    break
+                rt_cd = str((data or {}).get("rt_cd", ""))
+                if rt_cd and rt_cd != "0":
+                    break
 
-        return fills
+                rows = (data or {}).get("output") or []
+                if not rows:
+                    break
+
+                parsed = parse_rows(rows, end_dt)
+                for f in parsed:
+                    if f.execution_id in seen_execution_ids:
+                        continue
+                    seen_execution_ids.add(f.execution_id)
+                    fills.append(f)
+                    if len(fills) >= limit:
+                        break
+
+                max_dt_str = max(
+                    (str(r.get("ord_dt", "")) for r in rows if r.get("ord_dt")),
+                    default="",
+                )
+                if not max_dt_str:
+                    break
+
+                next_start = datetime.strptime(max_dt_str, "%Y%m%d").date() + timedelta(days=1)
+                if next_start <= start_date or next_start > kst_today:
+                    break
+
+                start_date = next_start
+                await asyncio.sleep(5)
+
+        fills.sort(key=lambda x: x.executed_at, reverse=True)
+        return fills[:limit]
