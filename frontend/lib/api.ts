@@ -174,7 +174,7 @@ export const accountsApi = {
 
 export const watchlistApi = {
     list: async (accountId: string) => {
-        const { data } = await apiClient.get<{symbol: string, is_active: boolean}[]>(`/accounts/${accountId}/watchlist`);
+        const { data } = await apiClient.get<{symbol: string, market?: string | null, is_active: boolean}[]>(`/accounts/${accountId}/watchlist`);
         return data;
     },
     add: async (accountId: string, symbol: string) => {
@@ -190,7 +190,7 @@ export const dataApi = {
         const { data } = await apiClient.get<SymbolInfo[]>('/data/symbols', { params: { active_only: activeOnly } });
         return data;
     },
-    addSymbol: async (payload: { ticker: string, name?: string, sector?: string }) => {
+    addSymbol: async (payload: { ticker: string, name?: string, sector?: string, market?: string }) => {
         await apiClient.post('/data/symbols', payload);
     },
     deactivateSymbol: async (ticker: string) => {
