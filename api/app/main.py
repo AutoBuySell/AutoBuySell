@@ -213,6 +213,11 @@ async def _ensure_schema_compat():
             text("ALTER TABLE broker_accounts ADD COLUMN IF NOT EXISTS external_id VARCHAR(100)")
         )
 
+        # Symbol market metadata for account-level market validation
+        await conn.execute(
+            text("ALTER TABLE symbols ADD COLUMN IF NOT EXISTS market VARCHAR(20)")
+        )
+
         # Account-scoped strategy params
         await conn.execute(
             text("ALTER TABLE strategy_params ADD COLUMN IF NOT EXISTS account_id UUID")

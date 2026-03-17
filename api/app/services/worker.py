@@ -22,6 +22,7 @@ from app.domain.models import (
     Position,
     RuntimeCandle,
     StrategyParam,
+    Symbol,
     SystemState,
 )
 from app.services.execution import ExecutionService
@@ -148,6 +149,18 @@ class AccountWorker:
                 symbols = sorted({w.symbol for w in watchlist_rows if w.symbol})
                 if not symbols:
                     return
+
+                allowed_markets = [
+                    str(m).upper() for m in (self.broker_account.config or {}).get("allowed_markets", []) if m
+                ]
+                if allowed_markets:
+                    sym_rows = (
+                        await db.execute(select(Symbol).where(Symbol.ticker.in_(symbols)))
+                    ).scalars().all()
+                    market_by_symbol = {s.ticker: (s.market or "").upper() for s in sym_rows}
+                    symbols = [s for s in symbols if not market_by_symbol.get(s) or market_by_symbol.get(s) in allowed_markets]
+                    if not symbols:
+                        return
 
                 strategy_name = self.active_strategy_name
                 strategy = self.strategies.get(strategy_name)

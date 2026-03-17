@@ -19,6 +19,10 @@
       "us_exchanges": [
         "NASD",
         "NYSE"
+      ],
+      "allowed_markets": [
+        "NASDAQ",
+        "NYSE"
       ]
     }
   },
@@ -42,6 +46,10 @@
       "us_exchanges": [
         "NASD",
         "NYSE"
+      ],
+      "allowed_markets": [
+        "NASDAQ",
+        "NYSE"
       ]
     }
   },
@@ -55,7 +63,11 @@
     },
     "config": {
       "base_url": "https://api.alpaca.markets",
-      "description": "Alpaca 실전계좌 #1"
+      "description": "Alpaca 실전계좌 #1",
+      "allowed_markets": [
+        "NASDAQ",
+        "NYSE"
+      ]
     }
   },
   {
@@ -68,7 +80,32 @@
     },
     "config": {
       "base_url": "https://paper-api.alpaca.markets",
-      "description": "Alpaca paper계좌 #1"
+      "description": "Alpaca paper계좌 #1",
+      "allowed_markets": [
+        "NASDAQ",
+        "NYSE"
+      ]
+    }
+  },
+  {
+    "external_id": "kis-kr-paper-1",
+    "name": "kis-kr-paper-1",
+    "broker_type": "kis_kr",
+    "credentials": {
+      "app_key": "KIS_KR_PAPER_APP_KEY (국내 모의 앱키)",
+      "app_secret": "KIS_KR_PAPER_APP_SECRET (국내 모의 앱시크릿)",
+      "cano": "87654321 (모의 계좌 앞 8자리)",
+      "acnt_prdt_cd": "01"
+    },
+    "config": {
+      "base_url": "https://openapivts.koreainvestment.com:29443",
+      "is_paper": true,
+      "market": "KRX",
+      "allowed_markets": [
+        "KOSPI",
+        "KOSDAQ"
+      ],
+      "description": "KIS 국내 모의계좌 #1 (KRX)"
     }
   }
 ]

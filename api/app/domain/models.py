@@ -75,6 +75,7 @@ class Symbol(TimeStampedBase):
     ticker: Mapped[str] = mapped_column(String(20), unique=True, index=True)
     name: Mapped[Optional[str]] = mapped_column(String(200))
     sector: Mapped[Optional[str]] = mapped_column(String(100))
+    market: Mapped[Optional[str]] = mapped_column(String(20), index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
