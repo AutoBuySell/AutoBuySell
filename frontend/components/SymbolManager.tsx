@@ -52,7 +52,15 @@ export default function SymbolManager({ accountId }: { accountId?: string }) {
 
     const addToWatchlist = async (ticker: string) => {
         if (!accountId) return;
-        await dataApi.addSymbol({ ticker });
+        // Symbol may already exist in master; still need to add to account watchlist.
+        try {
+            await dataApi.addSymbol({ ticker });
+        } catch (e: any) {
+            const msg = e?.response?.data?.detail || e?.message || '';
+            if (!String(msg).toLowerCase().includes('already exists')) {
+                throw e;
+            }
+        }
         await watchlistApi.add(accountId, ticker);
     };
 
