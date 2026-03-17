@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
-import { dataApi, watchlistApi } from '@/lib/api';
+import { accountsApi, dataApi, watchlistApi } from '@/lib/api';
 
 interface SymbolInfo {
     ticker: string;
@@ -17,6 +17,7 @@ export default function SymbolManager({ accountId }: { accountId?: string }) {
     const [newTicker, setNewTicker] = useState('');
     const [newName, setNewName] = useState('');
     const [newMarket, setNewMarket] = useState('');
+    const [allowedMarkets, setAllowedMarkets] = useState<string[]>([]);
     const [loading, setLoading] = useState(false);
     const [downloadStatus, setDownloadStatus] = useState<string | null>(null);
     const [showMaster, setShowMaster] = useState(false);
@@ -32,16 +33,36 @@ export default function SymbolManager({ accountId }: { accountId?: string }) {
 
     const activeSymbols = useMemo(() => symbols.filter(s => s.is_active), [symbols]);
 
+    const inferMarket = (ticker: string): string | '' => {
+        const t = ticker.trim().toUpperCase();
+        if (!t) return '';
+        if (/^\d{6}$/.test(t)) {
+            if (allowedMarkets.includes('KOSPI')) return 'KOSPI';
+            if (allowedMarkets.includes('KOSDAQ')) return 'KOSDAQ';
+        }
+        if (/^[A-Z\.\-]{1,10}$/.test(t)) {
+            if (allowedMarkets.includes('NASDAQ')) return 'NASDAQ';
+            if (allowedMarkets.includes('NYSE')) return 'NYSE';
+        }
+        return '';
+    };
+
     const fetchSymbols = async () => {
         try {
             if (!accountId) {
                 setSymbols([]);
+                setAllowedMarkets([]);
                 return;
             }
-            const [master, wl] = await Promise.all([
+            const [master, wl, accs] = await Promise.all([
                 dataApi.getSymbols(false),
                 watchlistApi.list(accountId),
+                accountsApi.list(true),
             ]);
+            const acct = (accs || []).find((a: any) => a.id === accountId);
+            const am = ((acct?.config?.allowed_markets || []) as string[]).map(x => String(x).toUpperCase());
+            setAllowedMarkets(am);
+
             const active = new Set((wl || []).filter(w => w.is_active).map(w => w.symbol.toUpperCase()));
             const merged = master.map(s => ({ ...s, is_active: active.has(s.ticker.toUpperCase()) }));
             setSymbols(merged.sort((a, b) => a.ticker.localeCompare(b.ticker)));
@@ -52,14 +73,11 @@ export default function SymbolManager({ accountId }: { accountId?: string }) {
 
     const addToWatchlist = async (ticker: string) => {
         if (!accountId) return;
-        // Symbol may already exist in master; still need to add to account watchlist.
         try {
             await dataApi.addSymbol({ ticker });
         } catch (e: any) {
             const msg = e?.response?.data?.detail || e?.message || '';
-            if (!String(msg).toLowerCase().includes('already exists')) {
-                throw e;
-            }
+            if (!String(msg).toLowerCase().includes('already exists')) throw e;
         }
         await watchlistApi.add(accountId, ticker);
     };
@@ -68,12 +86,14 @@ export default function SymbolManager({ accountId }: { accountId?: string }) {
         if (!newTicker.trim() || !accountId) return;
         setLoading(true);
         try {
+            const ticker = newTicker.toUpperCase();
+            const market = (newMarket || inferMarket(ticker) || undefined);
             await dataApi.addSymbol({
-                ticker: newTicker.toUpperCase(),
+                ticker,
                 name: newName || undefined,
-                market: newMarket || undefined,
+                market,
             });
-            await addToWatchlist(newTicker.toUpperCase());
+            await addToWatchlist(ticker);
             setNewTicker('');
             setNewName('');
             setNewMarket('');
@@ -200,10 +220,13 @@ export default function SymbolManager({ accountId }: { accountId?: string }) {
 
                         <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
                             <input type="text" placeholder="Ticker (e.g., 005930)" value={newTicker} onChange={(e) => setNewTicker(e.target.value.toUpperCase())} className="px-2 py-1 border rounded text-sm bg-background" />
-                            <input type="text" placeholder="Name (e.g., 삼성전자)" value={newName} onChange={(e) => setNewName(e.target.value)} className="px-2 py-1 border rounded text-sm bg-background" />
-                            <input type="text" placeholder="Market (e.g., KOSPI)" value={newMarket} onChange={(e) => setNewMarket(e.target.value.toUpperCase())} className="px-2 py-1 border rounded text-sm bg-background" />
+                            <input type="text" placeholder="Name (optional)" value={newName} onChange={(e) => setNewName(e.target.value)} className="px-2 py-1 border rounded text-sm bg-background" />
+                            <input type="text" placeholder="Market auto-filled (optional override)" value={newMarket} onChange={(e) => setNewMarket(e.target.value.toUpperCase())} className="px-2 py-1 border rounded text-sm bg-background" />
                             <button onClick={addSymbol} disabled={loading} className="px-3 py-1 bg-primary text-primary-foreground rounded text-sm hover:bg-primary/90">Add + Enable</button>
                         </div>
+                        {allowedMarkets.length > 0 && (
+                            <p className="text-xs text-muted-foreground mt-2">Allowed markets for this account: {allowedMarkets.join(', ')}</p>
+                        )}
                     </CardContent>
                 </Card>
             )}
