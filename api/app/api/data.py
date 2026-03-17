@@ -16,12 +16,14 @@ class SymbolCreate(BaseModel):
     ticker: str
     name: str | None = None
     sector: str | None = None
+    market: str | None = None  # e.g. NASDAQ, NYSE, KOSPI, KOSDAQ
 
 
 class SymbolResponse(BaseModel):
     ticker: str
     name: str | None
     sector: str | None
+    market: str | None
     is_active: bool
 
 
@@ -53,7 +55,7 @@ async def list_symbols(active_only: bool = True, db: AsyncSession = Depends(get_
 
     return [
         SymbolResponse(
-            ticker=s.ticker, name=s.name, sector=s.sector, is_active=s.is_active
+            ticker=s.ticker, name=s.name, sector=s.sector, market=s.market, is_active=s.is_active
         )
         for s in symbols
     ]
@@ -74,12 +76,17 @@ async def add_symbol(symbol: SymbolCreate, db: AsyncSession = Depends(get_db)):
                 ticker=existing.ticker,
                 name=existing.name,
                 sector=existing.sector,
+                market=existing.market,
                 is_active=existing.is_active,
             )
         raise HTTPException(status_code=400, detail="Symbol already exists")
 
     new_symbol = Symbol(
-        ticker=symbol.ticker, name=symbol.name, sector=symbol.sector, is_active=True
+        ticker=symbol.ticker,
+        name=symbol.name,
+        sector=symbol.sector,
+        market=(symbol.market.upper() if symbol.market else None),
+        is_active=True,
     )
 
     db.add(new_symbol)
@@ -90,6 +97,7 @@ async def add_symbol(symbol: SymbolCreate, db: AsyncSession = Depends(get_db)):
         ticker=new_symbol.ticker,
         name=new_symbol.name,
         sector=new_symbol.sector,
+        market=new_symbol.market,
         is_active=new_symbol.is_active,
     )
 

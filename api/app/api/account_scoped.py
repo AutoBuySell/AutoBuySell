@@ -17,7 +17,7 @@ from app.brokers.base import (
     PortfolioHistory,
 )
 from app.core.database import get_db
-from app.domain.models import AccountWatchlist, LogEntry, Order, SignalLog, StrategyParam, Symbol
+from app.domain.models import AccountWatchlist, BrokerAccount, LogEntry, Order, SignalLog, StrategyParam, Symbol
 from app.services.trading import TradingCoordinator
 
 router = APIRouter()
@@ -74,6 +74,7 @@ class SystemLogResponse(BaseModel):
 
 class WatchlistItem(BaseModel):
     symbol: str
+    market: str | None = None
     is_active: bool = True
 
 
@@ -219,7 +220,13 @@ async def get_watchlist(account_id: UUID, db: AsyncSession = Depends(get_db)):
         .order_by(AccountWatchlist.symbol.asc())
     )
     rows = (await db.execute(query)).scalars().all()
-    return [WatchlistItem(symbol=r.symbol, is_active=r.is_active) for r in rows]
+    out = []
+    for r in rows:
+        sym = (
+            await db.execute(select(Symbol).where(Symbol.ticker == r.symbol))
+        ).scalar_one_or_none()
+        out.append(WatchlistItem(symbol=r.symbol, market=(sym.market if sym else None), is_active=r.is_active))
+    return out
 
 
 @router.post("/{account_id}/watchlist", response_model=WatchlistItem)
@@ -228,12 +235,38 @@ async def add_watchlist_item(account_id: UUID, item: WatchlistItem, db: AsyncSes
     if not symbol:
         raise HTTPException(400, "symbol is required")
 
+    acct = (
+        await db.execute(select(BrokerAccount).where(BrokerAccount.id == account_id))
+    ).scalar_one_or_none()
+    if not acct:
+        raise HTTPException(404, "account not found")
+
+    allowed_markets = [str(m).upper() for m in (acct.config or {}).get("allowed_markets", []) if m]
+
     # Ensure symbol master exists
     existing_symbol = (
         await db.execute(select(Symbol).where(Symbol.ticker == symbol))
     ).scalar_one_or_none()
     if not existing_symbol:
-        db.add(Symbol(ticker=symbol, name=symbol, sector=None, is_active=True))
+        db.add(
+            Symbol(
+                ticker=symbol,
+                name=symbol,
+                sector=None,
+                market=(item.market.upper() if item.market else None),
+                is_active=True,
+            )
+        )
+    elif item.market and not existing_symbol.market:
+        existing_symbol.market = item.market.upper()
+
+    # Validate market against account allowed_markets when both are present
+    symbol_market = (existing_symbol.market if existing_symbol else (item.market.upper() if item.market else None))
+    if allowed_markets and symbol_market and symbol_market.upper() not in allowed_markets:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Symbol market '{symbol_market}' is not allowed for this account. allowed_markets={allowed_markets}",
+        )
 
     existing = (
         await db.execute(
@@ -246,12 +279,12 @@ async def add_watchlist_item(account_id: UUID, item: WatchlistItem, db: AsyncSes
     if existing:
         existing.is_active = True
         await db.commit()
-        return WatchlistItem(symbol=existing.symbol, is_active=existing.is_active)
+        return WatchlistItem(symbol=existing.symbol, market=symbol_market, is_active=existing.is_active)
 
     row = AccountWatchlist(account_id=account_id, symbol=symbol, is_active=True)
     db.add(row)
     await db.commit()
-    return WatchlistItem(symbol=row.symbol, is_active=row.is_active)
+    return WatchlistItem(symbol=row.symbol, market=symbol_market, is_active=row.is_active)
 
 
 @router.delete("/{account_id}/watchlist/{symbol}")
