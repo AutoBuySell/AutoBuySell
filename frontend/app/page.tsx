@@ -166,7 +166,7 @@ export default function Home() {
                     return (
                         <>
                             <div className={`text-2xl font-bold ${colorClass}`}>
-                                ${totalPl.toLocaleString()}
+                                {formatMoney(totalPl, account?.currency)}
                             </div>
                              <p className="text-xs text-muted-foreground">Across all positions</p>
                         </>

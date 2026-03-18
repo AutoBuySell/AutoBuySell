@@ -13,6 +13,7 @@ import {
 import NominalIncomes from '@/components/analysis/NominalIncomes';
 import EachEquityPerformance from '@/components/analysis/EachEquityPerformance';
 import Transactions from '@/components/analysis/Transactions';
+import { formatMoney } from '@/lib/format';
 
 const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#82ca9d'];
 
@@ -55,6 +56,7 @@ export default function AnalysisPage() {
   // -- Live Analysis State --
   const [history, setHistory] = useState<PortfolioHistory | null>(null);
   const [positions, setPositions] = useState<Position[]>([]);
+  const [currency, setCurrency] = useState<string>('USD');
   const [historyPeriod, setHistoryPeriod] = useState('1M');
   const [selectedAccountId] = useSelectedAccountId();
 
@@ -137,11 +139,14 @@ export default function AnalysisPage() {
   const loadLiveData = async () => {
       try {
           if (!selectedAccountId) return;
-          const hist = await tradingApi.getHistory(historyPeriod, '1D', selectedAccountId);
+          const [hist, pos, acc] = await Promise.all([
+              tradingApi.getHistory(historyPeriod, '1D', selectedAccountId),
+              tradingApi.getPositions(selectedAccountId),
+              tradingApi.getAccount(selectedAccountId),
+          ]);
           setHistory(hist);
-
-          const pos = await tradingApi.getPositions(selectedAccountId);
           setPositions(pos);
+          setCurrency(acc?.currency || 'USD');
       } catch (e) {
           console.error("Failed to load live data", e);
       }
@@ -884,7 +889,7 @@ export default function AnalysisPage() {
                                    {positions.map(p => (
                                        <tr key={p.symbol} className="border-b last:border-0 hover:bg-muted/50">
                                            <td className="py-2">{p.symbol}</td>
-                                           <td className="py-2 text-right">${p.market_value.toLocaleString()}</td>
+                                           <td className="py-2 text-right">{formatMoney(p.market_value, currency)}</td>
                                            <td className={`py-2 text-right ${p.unrealized_plpc >= 0 ? 'text-green-500' : 'text-red-500'}`}>
                                                {(p.unrealized_plpc * 100).toFixed(2)}%
                                            </td>
