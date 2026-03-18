@@ -134,7 +134,7 @@ export default function Home() {
                 {account ? `$${account.portfolio_value.toLocaleString()}` : 'N/A'}
               </div>
               <p className="text-xs text-muted-foreground">
-                Cash: {account ? `$${account.cash.toLocaleString()}` : '-'}
+                Buying Power: {account ? `$${account.buying_power.toLocaleString()}` : '-'}
               </p>
               <p className="text-xs text-muted-foreground mt-1">
                 Mode: {account ? (account.is_paper ? 'Paper' : 'Live') : '-'}
