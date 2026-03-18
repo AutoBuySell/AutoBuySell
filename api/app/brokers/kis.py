@@ -318,15 +318,11 @@ class KISBroker(BrokerAdapter):
 
         # Position valuation from per-exchange positions (covers NASD + NYSE if configured).
         position_value = sum(float(p.market_value or 0.0) for p in (await self.get_positions()))
-        cash = cash if cash > 0 else 0.0
-        portfolio = position_value + cash
 
-        # Safety fallback: prevent clearly invalid negative/zero equity display
-        # when buying power is available (common in paper accounts).
-        if portfolio <= 0 and buying_power > 0:
-            portfolio = buying_power
-            if cash <= 0 and position_value <= 0:
-                cash = buying_power
+        # In paper responses cash fields are sometimes zero while orderable cash is populated.
+        effective_cash = cash if cash > 0 else (buying_power if buying_power > 0 else 0.0)
+        cash = effective_cash
+        portfolio = position_value + effective_cash
 
         return AccountInfo(
             account_id=f"{self.cano}-{self.acnt_prdt_cd}",

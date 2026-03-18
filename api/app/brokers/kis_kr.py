@@ -226,6 +226,31 @@ class KISKRBroker:
             )
         return positions
 
+    def _kr_tick_size(self, price: float) -> int:
+        p = max(float(price), 0.0)
+        if p < 2000:
+            return 1
+        if p < 5000:
+            return 5
+        if p < 20000:
+            return 10
+        if p < 50000:
+            return 50
+        if p < 200000:
+            return 100
+        if p < 500000:
+            return 500
+        return 1000
+
+    def _normalize_kr_price(self, raw_price: float, side: str) -> int:
+        tick = self._kr_tick_size(raw_price)
+        p = int(max(raw_price, 1.0))
+        if side.lower() == "sell":
+            # round up for sell to avoid unnecessarily lower limit price
+            return ((p + tick - 1) // tick) * tick
+        # buy/default: round down to avoid accidental overpricing
+        return (p // tick) * tick
+
     async def submit_order(self, order: OrderRequest) -> OrderResult:
         is_buy = order.side.lower() == "buy"
         tr_id = (
@@ -238,13 +263,17 @@ class KISKRBroker:
 
         order_type = "01" if order.type.lower() == "limit" else "01"  # keep limit-compatible for safety
         price = order.limit_price or await self._fetch_kr_price(order.symbol)
+        norm_price = self._normalize_kr_price(float(price), order.side)
+        qty = int(order.qty)
+        if qty <= 0:
+            raise RuntimeError("KISKR invalid order qty: must be integer >= 1")
         payload = {
             "CANO": self.cano,
             "ACNT_PRDT_CD": self.acnt_prdt_cd,
             "PDNO": order.symbol,
             "ORD_DVSN": order_type,
-            "ORD_QTY": str(int(order.qty)),
-            "ORD_UNPR": str(int(price)),
+            "ORD_QTY": str(qty),
+            "ORD_UNPR": str(norm_price),
         }
 
         async with httpx.AsyncClient(timeout=20.0) as client:
