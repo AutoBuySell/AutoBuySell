@@ -2,10 +2,12 @@
 
 import { useEffect, useState } from 'react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
-import { logApi } from '@/lib/api';
+import { logApi, tradingApi } from '@/lib/api';
+import { formatMoney } from '@/lib/format';
 
 export default function Transactions({ accountId, limit = 50, refreshTrigger }: { accountId?: string, limit?: number, refreshTrigger?: number }) {
     const [trades, setTrades] = useState<any[]>([]);
+    const [currency, setCurrency] = useState<string>('USD');
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
@@ -19,8 +21,12 @@ export default function Transactions({ accountId, limit = 50, refreshTrigger }: 
                 setTrades([]);
                 return;
             }
-            const data = await logApi.getTrades(accountId, limit);
+            const [data, acc] = await Promise.all([
+                logApi.getTrades(accountId, limit),
+                tradingApi.getAccount(accountId),
+            ]);
             setTrades(data);
+            setCurrency(acc?.currency || 'USD');
         } catch (e) {
             console.error("Failed to load trades", e);
         } finally {
@@ -62,10 +68,10 @@ export default function Transactions({ accountId, limit = 50, refreshTrigger }: 
                                      </td>
                                      <td className="px-4 py-2 text-right">{t.qty}</td>
                                      <td className="px-4 py-2 text-right">
-                                         {t.price ? `$${t.price.toFixed(2)}` : '-'}
+                                         {t.price ? formatMoney(t.price, currency) : '-'}
                                      </td>
                                      <td className="px-4 py-2 text-right font-medium">
-                                         {t.price ? `$${(t.price * t.qty).toLocaleString()}` : '-'}
+                                         {t.price ? formatMoney(t.price * t.qty, currency) : '-'}
                                      </td>
                                  </tr>
                              ))}

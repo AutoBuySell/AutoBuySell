@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { tradingApi, accountsApi, AccountInfo, Position } from "@/lib/api";
 import { useSelectedAccountId } from "@/lib/accountScope";
+import { formatMoney } from "@/lib/format";
 import { wsClient } from "@/lib/websocket";
 import SymbolManager from "@/components/SymbolManager";
 import SettingsPanel from "@/components/SettingsPanel";
@@ -18,19 +19,6 @@ export default function Home() {
   const [selectedAccountId, setSelectedAccountId] = useSelectedAccountId();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-
-  const formatMoney = (v: number | undefined, currency?: string) => {
-    if (v === undefined || v === null) return '-';
-    try {
-      return new Intl.NumberFormat('ko-KR', {
-        style: 'currency',
-        currency: (currency || 'USD').toUpperCase(),
-        maximumFractionDigits: 2,
-      }).format(v);
-    } catch {
-      return `${v.toLocaleString()}`;
-    }
-  };
 
   const fetchData = async (accountId?: string) => {
       try {
@@ -221,9 +209,9 @@ export default function Home() {
                           <tr key={p.symbol} className="border-b last:border-0">
                             <td className="py-2 font-medium">{p.symbol}</td>
                             <td className="py-2 text-right">{p.qty}</td>
-                            <td className="py-2 text-right">${p.market_value.toLocaleString()}</td>
+                            <td className="py-2 text-right">{formatMoney(p.market_value, account?.currency)}</td>
                             <td className={`py-2 text-right ${p.unrealized_pl >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                              ${p.unrealized_pl.toLocaleString()}
+                              {formatMoney(p.unrealized_pl, account?.currency)}
                             </td>
                           </tr>
                         ))}
