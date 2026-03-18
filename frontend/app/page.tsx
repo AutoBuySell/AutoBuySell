@@ -19,6 +19,19 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const formatMoney = (v: number | undefined, currency?: string) => {
+    if (v === undefined || v === null) return '-';
+    try {
+      return new Intl.NumberFormat('ko-KR', {
+        style: 'currency',
+        currency: (currency || 'USD').toUpperCase(),
+        maximumFractionDigits: 2,
+      }).format(v);
+    } catch {
+      return `${v.toLocaleString()}`;
+    }
+  };
+
   const fetchData = async (accountId?: string) => {
       try {
         const [accountsData, statusData] = await Promise.all([
@@ -131,10 +144,10 @@ export default function Home() {
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">
-                {account ? `$${account.portfolio_value.toLocaleString()}` : 'N/A'}
+                {account ? formatMoney(account.portfolio_value, account.currency) : 'N/A'}
               </div>
               <p className="text-xs text-muted-foreground">
-                Buying Power: {account ? `$${account.buying_power.toLocaleString()}` : '-'}
+                Buying Power: {account ? formatMoney(account.buying_power, account.currency) : '-'}
               </p>
               <p className="text-xs text-muted-foreground mt-1">
                 Mode: {account ? (account.is_paper ? 'Paper' : 'Live') : '-'}
