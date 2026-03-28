@@ -122,6 +122,20 @@ async def _ensure_strategy_metadata_in_db():
                 )
 
             for acct in active_accounts:
+                cfg = acct.config or {}
+                allowed_markets = [str(x).upper() for x in cfg.get("allowed_markets", []) if x]
+                is_kr_account = acct.broker_type == "kis_kr" or any(m in {"KOSPI", "KOSDAQ", "KRX"} for m in allowed_markets)
+
+                def _localized_params(base_params: dict) -> dict:
+                    p = dict(base_params or {})
+                    if is_kr_account:
+                        # KR account defaults: use KRW notionals
+                        if p.get("target_value") in (None, 1000, 1000.0):
+                            p["target_value"] = 1_000_000.0
+                        if p.get("limit") in (None, 1000, 1000.0):
+                            p["limit"] = 1_000_000.0
+                    return p
+
                 active_default = (
                     await db.execute(
                         select(StrategyParam)
@@ -138,10 +152,22 @@ async def _ensure_strategy_metadata_in_db():
                             strategy_name=name,
                             symbol=None,
                             version=1,
-                            params=getattr(strategy, "params", {}) or {},
+                            params=_localized_params(getattr(strategy, "params", {}) or {}),
                             is_active=True,
                         )
                     )
+                elif is_kr_account:
+                    # Non-breaking upgrade path: only bump clearly legacy USD-like defaults.
+                    cur = dict(active_default.params or {})
+                    changed = False
+                    if cur.get("target_value") in (1000, 1000.0):
+                        cur["target_value"] = 1_000_000.0
+                        changed = True
+                    if cur.get("limit") in (1000, 1000.0):
+                        cur["limit"] = 1_000_000.0
+                        changed = True
+                    if changed:
+                        active_default.params = cur
 
         await db.commit()
 

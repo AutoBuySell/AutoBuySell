@@ -6,6 +6,7 @@ from typing import Any, List, Optional
 
 import httpx
 import asyncio
+import random
 from zoneinfo import ZoneInfo
 from datetime import time as dtime
 
@@ -85,6 +86,7 @@ class KISBroker(BrokerAdapter):
         self._access_token: Optional[str] = None
         self._token_expires_at: Optional[datetime] = None
         self._last_market_closed_reject_at: Optional[datetime] = None
+        self._token_lock = asyncio.Lock()
         self._request_lock = asyncio.Lock()
         self._last_request_at: Optional[datetime] = None
         self._min_request_interval_sec = 0.35
@@ -101,25 +103,49 @@ class KISBroker(BrokerAdapter):
         ):
             return self._access_token
 
-        url = f"{self.base_url}/oauth2/tokenP"
-        payload = {
-            "grant_type": "client_credentials",
-            "appkey": self.app_key,
-            "appsecret": self.app_secret,
-        }
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.post(url, json=payload)
-            resp.raise_for_status()
-            data = resp.json()
+        async with self._token_lock:
+            # double-check after lock (another coroutine might have refreshed)
+            now = datetime.now(timezone.utc)
+            if (
+                self._access_token
+                and self._token_expires_at
+                and self._token_expires_at > now
+            ):
+                return self._access_token
 
-        token = data.get("access_token")
-        if not token:
-            raise RuntimeError(f"KIS token response missing access_token: {data}")
+            url = f"{self.base_url}/oauth2/tokenP"
+            payload = {
+                "grant_type": "client_credentials",
+                "appkey": self.app_key,
+                "appsecret": self.app_secret,
+            }
 
-        expires_in = int(data.get("expires_in", 3600))
-        self._access_token = token
-        self._token_expires_at = now + timedelta(seconds=max(expires_in - 60, 60))
-        return token
+            last_err: Optional[Exception] = None
+            for i in range(3):
+                try:
+                    async with httpx.AsyncClient(timeout=15.0) as client:
+                        resp = await client.post(url, json=payload)
+                        if resp.status_code in (403, 429, 500, 502, 503, 504) and i < 2:
+                            await asyncio.sleep((0.4 * (i + 1)) + random.uniform(0.05, 0.25))
+                            continue
+                        resp.raise_for_status()
+                        data = resp.json()
+
+                    token = data.get("access_token")
+                    if not token:
+                        raise RuntimeError(f"KIS token response missing access_token: {data}")
+
+                    expires_in = int(data.get("expires_in", 3600))
+                    self._access_token = token
+                    self._token_expires_at = now + timedelta(seconds=max(expires_in - 60, 60))
+                    return token
+                except Exception as e:
+                    last_err = e
+                    if i < 2:
+                        await asyncio.sleep((0.4 * (i + 1)) + random.uniform(0.05, 0.25))
+                        continue
+
+            raise RuntimeError(f"KIS token issuance failed after retries: {last_err}")
 
     async def _headers(self, tr_id: str) -> dict:
         token = await self._ensure_token()
