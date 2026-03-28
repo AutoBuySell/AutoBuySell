@@ -43,36 +43,36 @@ async def create_all_tables():
 async def seed_initial_data():
     """Seed initial strategy and system data."""
     print("🌱 Seeding initial data...")
-    
+
     async with AsyncSessionLocal() as db:
         # Check if strategy already exists
         result = await db.execute(
             select(StrategyMeta).where(StrategyMeta.name == "MeanReversion_v1")
         )
         existing_strategy = result.scalar_one_or_none()
-        
+
         if not existing_strategy:
             print("  Adding MeanReversion_v1 strategy...")
             strategy = StrategyMeta(
                 name="MeanReversion_v1",
                 description="Buy on dip, sell on rally (Mean Reversion)",
-                class_path="app.strategies.mean_reversion.MeanReversionStrategy"
+                class_path="app.strategies.mean_reversion.MeanReversionStrategy",
             )
             db.add(strategy)
             await db.commit()
         else:
             print("  Strategy MeanReversion_v1 already exists, skipping.")
-        
+
         # Check if default params exist
         result = await db.execute(
             select(StrategyParam).where(
                 StrategyParam.strategy_name == "MeanReversion_v1",
                 StrategyParam.symbol.is_(None),
-                StrategyParam.is_active == True
+                StrategyParam.is_active == True,
             )
         )
         existing_param = result.scalar_one_or_none()
-        
+
         if not existing_param:
             print("  Adding default strategy parameters...")
             params = StrategyParam(
@@ -89,15 +89,15 @@ async def seed_initial_data():
                     "price_type": "open",
                     "max_position_pct": 0.20,
                     "candle_buffer": 10,
-                    "scale_factor": 200.0
+                    "scale_factor": 200.0,
                 },
-                is_active=True
+                is_active=True,
             )
             db.add(params)
             await db.commit()
         else:
             print("  Default parameters already exist, skipping.")
-    
+
     print("✅ Initial data seeded successfully.")
 
 
@@ -107,11 +107,11 @@ async def save_trade_sync_timestamp():
     Only trades occurring after this timestamp will be synced from broker.
     """
     print("🕐 Saving trade sync timestamp...")
-    
+
     from datetime import datetime, timezone
-    
+
     STATE_KEY_TRADE_SYNC_AFTER = "trade_sync_after"
-    
+
     async with AsyncSessionLocal() as db:
         # Check if already exists
         existing = await db.execute(
@@ -120,7 +120,7 @@ async def save_trade_sync_timestamp():
         if existing.scalar_one_or_none():
             print("  Trade sync timestamp already exists, skipping.")
             return
-        
+
         # Save current timestamp
         init_timestamp = datetime.now(timezone.utc).isoformat()
         state = SystemState(key=STATE_KEY_TRADE_SYNC_AFTER, value=init_timestamp)
@@ -135,32 +135,31 @@ async def sync_initial_positions():
     This captures holdings that existed before the system started tracking.
     """
     print("📊 Syncing initial positions from broker...")
-    
+
     try:
         from app.brokers.alpaca import AlpacaBroker
         from app.domain.models import Position, Trade
         from datetime import datetime, timezone, timedelta
-        
+
         broker = AlpacaBroker()
         positions = await broker.get_positions()
-        
+
         if not positions:
             print("  No existing positions found in broker.")
             return
-        
+
         async with AsyncSessionLocal() as db:
             for pos in positions:
                 # Check if initial trade already exists
                 existing = await db.execute(
                     select(Trade).where(
-                        Trade.symbol == pos.symbol,
-                        Trade.source == 'initial'
+                        Trade.symbol == pos.symbol, Trade.source == "initial"
                     )
                 )
                 if existing.scalar_one_or_none():
                     print(f"  {pos.symbol}: Initial trade already exists, skipping.")
                     continue
-                
+
                 # Create Position record
                 existing_pos = await db.execute(
                     select(Position).where(Position.symbol == pos.symbol)
@@ -173,29 +172,31 @@ async def sync_initial_positions():
                         current_price=pos.current_price,
                         market_value=pos.market_value,
                         unrealized_pl=pos.unrealized_pl,
-                        unrealized_plpc=pos.unrealized_plpc
+                        unrealized_plpc=pos.unrealized_plpc,
                     )
                     db.add(new_pos)
-                
+
                 # Create virtual initial Trade
                 initial_timestamp = datetime.now(timezone.utc)
-                
+
                 initial_trade = Trade(
                     order_id=None,
                     symbol=pos.symbol,
-                    side='buy',
+                    side="buy",
                     qty=pos.qty,
                     price=pos.avg_entry_price,
                     commission=0.0,
                     execution_id=f"initial_{pos.symbol}",
-                    source='initial',
-                    created_at=initial_timestamp
+                    source="initial",
+                    created_at=initial_timestamp,
                 )
                 db.add(initial_trade)
-                print(f"  {pos.symbol}: Created initial trade for {pos.qty} shares @ ${pos.avg_entry_price:.2f}")
-            
+                print(
+                    f"  {pos.symbol}: Created initial trade for {pos.qty} shares @ ${pos.avg_entry_price:.2f}"
+                )
+
             await db.commit()
-        
+
         print(f"✅ Initial positions synced: {len(positions)} positions processed.")
     except Exception as e:
         print(f"⚠️  Failed to sync initial positions: {e}")
@@ -207,28 +208,30 @@ async def main(reset: bool = False):
     print("=" * 60)
     print("AutoBuySell Database Initialization")
     print("=" * 60)
-    
+
     if reset:
         print("\n⚠️  RESET MODE: All existing data will be deleted!")
         confirm = input("Are you sure? Type 'yes' to continue: ")
-        if confirm.lower() != 'yes':
+        if confirm.lower() != "yes":
             print("❌ Initialization cancelled.")
             return
         await drop_all_tables()
-    
+
     await create_all_tables()
     await seed_initial_data()
     await sync_initial_positions()
     await save_trade_sync_timestamp()
-    
+
     # Show table count
     async with engine.connect() as conn:
-        result = await conn.execute(text(
-            "SELECT count(*) FROM information_schema.tables "
-            "WHERE table_schema = 'public'"
-        ))
+        result = await conn.execute(
+            text(
+                "SELECT count(*) FROM information_schema.tables "
+                "WHERE table_schema = 'public'"
+            )
+        )
         table_count = result.scalar()
-    
+
     print("\n" + "=" * 60)
     print(f"✅ Database initialized successfully!")
     print(f"📊 Total tables: {table_count}")
@@ -240,8 +243,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--reset",
         action="store_true",
-        help="Drop all tables and recreate (WARNING: deletes all data)"
+        help="Drop all tables and recreate (WARNING: deletes all data)",
     )
-    
+
     args = parser.parse_args()
     asyncio.run(main(reset=args.reset))

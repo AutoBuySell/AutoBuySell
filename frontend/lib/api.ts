@@ -2,9 +2,23 @@ import axios from 'axios';
 
 // Base URL for all API v1 endpoints
 // Base URL for all API v1 endpoints
-const API_BASE = typeof window !== 'undefined' 
-    ? `http://${window.location.hostname}:8000/api/v1`
-    : (process.env.NEXT_PUBLIC_BACKEND_SERVER_URL || 'http://localhost:8000/api/v1');
+const API_BASE = (() => {
+  const explicit = process.env.NEXT_PUBLIC_BACKEND_SERVER_URL;
+  if (explicit && explicit.trim().length > 0) {
+    return explicit.replace(/\/$/, '');
+  }
+
+  if (typeof window !== 'undefined') {
+    const configuredPort = process.env.NEXT_PUBLIC_BACKEND_PORT;
+    if (configuredPort && configuredPort.trim().length > 0) {
+      return `${window.location.protocol}//${window.location.hostname}:${configuredPort}/api/v1`;
+    }
+    // Same-origin fallback (works behind reverse proxy)
+    return `${window.location.origin}/api/v1`;
+  }
+
+  return 'http://localhost:8000/api/v1';
+})();
 
 export const apiClient = axios.create({
   baseURL: API_BASE,
@@ -20,6 +34,14 @@ export interface AccountInfo {
   portfolio_value: number;
   buying_power: number;
   is_paper: boolean;
+}
+
+export interface BrokerAccount {
+  id: string;
+  name: string;
+  broker_type: string;
+  config: Record<string, any>;
+  is_active: boolean;
 }
 
 export interface Position {
@@ -66,6 +88,7 @@ export interface BacktestRun {
     strategy: string;
     symbol: string;
     status: string;
+    error_message?: string | null;
     created_at: string;
 }
 
@@ -74,11 +97,12 @@ export interface BacktestResult {
         strategy: string;
         params: Record<string, any>;
         status: string;
+        error_message?: string | null;
     };
     result: {
         total_return: number;
         total_trades: number;
-        equity_curve: Array<{time: string, equity: number}>;
+        equity_curve: Array<{time: string, equity: number, price?: number | null, price_symbol?: string | null}>;
         metrics: {
             trades: Array<any>;
             signals?: Array<any>;
@@ -96,35 +120,69 @@ export interface LogEntry {
 
 // --- API Methods ---
 
+const withAccount = (accountId?: string) => (
+  accountId ? { account_id: accountId } : {}
+);
+
 export const tradingApi = {
-  getAccount: async () => {
-    const { data } = await apiClient.get<AccountInfo>('/trading/account');
+  getGlobalStatus: async () => {
+    const { data } = await apiClient.get('/accounts/_status');
     return data;
   },
-  getPositions: async () => {
-    const { data } = await apiClient.get<Position[]>('/trading/positions');
+  getAccount: async (accountId: string) => {
+    const { data } = await apiClient.get<AccountInfo>(`/accounts/${accountId}/trading/account`);
     return data;
   },
-  getHistory: async (period: string = '1M', timeframe: string = '1D') => {
-    const { data } = await apiClient.get<PortfolioHistory>('/trading/history', { 
-        params: { period, timeframe } 
+  getPositions: async (accountId: string) => {
+    const { data } = await apiClient.get<Position[]>(`/accounts/${accountId}/trading/positions`);
+    return data;
+  },
+  getHistory: async (period: string = '1M', timeframe: string = '1D', accountId: string) => {
+    const { data } = await apiClient.get<PortfolioHistory>(`/accounts/${accountId}/trading/history`, {
+      params: { period, timeframe }
     });
     return data;
   },
-  getStatus: async () => {
-      const { data } = await apiClient.get('/trading/status');
+  getStatus: async (accountId: string) => {
+      const { data } = await apiClient.get(`/accounts/${accountId}/trading/status`);
       return data;
   },
-  start: async () => {
-      await apiClient.post('/trading/start');
+  start: async (accountId: string) => {
+      await apiClient.post(`/accounts/${accountId}/trading/start`);
   },
-  stop: async () => {
-      await apiClient.post('/trading/stop');
+  stop: async (accountId: string) => {
+      await apiClient.post(`/accounts/${accountId}/trading/stop`);
   },
-  setStrategy: async (strategyName: string) => {
-      const { data } = await apiClient.put('/trading/strategy', { strategy_name: strategyName });
+  setStrategy: async (strategyName: string, accountId: string) => {
+      const { data } = await apiClient.put(`/accounts/${accountId}/trading/strategy`, { strategy_name: strategyName });
       return data;
   }
+};
+
+export const accountsApi = {
+  list: async (activeOnly: boolean = false) => {
+    const { data } = await apiClient.get<BrokerAccount[]>('/accounts/', {
+      params: { active_only: activeOnly },
+    });
+    return data;
+  },
+  migrateTrades: async (accountId: string) => {
+    const { data } = await apiClient.post(`/accounts/${accountId}/migrate-trades`);
+    return data;
+  }
+};
+
+export const watchlistApi = {
+    list: async (accountId: string) => {
+        const { data } = await apiClient.get<{symbol: string, market?: string | null, is_active: boolean}[]>(`/accounts/${accountId}/watchlist`);
+        return data;
+    },
+    add: async (accountId: string, symbol: string) => {
+        await apiClient.post(`/accounts/${accountId}/watchlist`, { symbol, is_active: true });
+    },
+    remove: async (accountId: string, symbol: string) => {
+        await apiClient.delete(`/accounts/${accountId}/watchlist/${symbol}`);
+    },
 };
 
 export const dataApi = {
@@ -132,7 +190,7 @@ export const dataApi = {
         const { data } = await apiClient.get<SymbolInfo[]>('/data/symbols', { params: { active_only: activeOnly } });
         return data;
     },
-    addSymbol: async (payload: { ticker: string, name?: string, sector?: string }) => {
+    addSymbol: async (payload: { ticker: string, name?: string, sector?: string, market?: string }) => {
         await apiClient.post('/data/symbols', payload);
     },
     deactivateSymbol: async (ticker: string) => {
@@ -151,6 +209,24 @@ export const dataApi = {
             params: { symbols: symbols.join(','), start_date: startDate, end_date: endDate, timeframe }
         });
         return data; // Returns missing symbols
+    }
+};
+
+export const accountSettingsApi = {
+    getStrategyParams: async (accountId: string, strategy: string, symbol?: string | null) => {
+        const params = symbol ? { symbol } : {};
+        try {
+            const { data } = await apiClient.get<{version: number, symbol: string | null, params: Record<string, any>}>(`/accounts/${accountId}/settings/strategies/${strategy}/params/active`, { params });
+            return data;
+        } catch (e: any) {
+            if (e.response && e.response.status === 404) return null;
+            throw e;
+        }
+    },
+    updateStrategyParams: async (accountId: string, strategy: string, params: Record<string, any>, symbol?: string | null) => {
+        const query = symbol ? `?symbol=${symbol}` : '';
+        const { data } = await apiClient.put(`/accounts/${accountId}/settings/strategies/${strategy}/params${query}`, { params });
+        return data;
     }
 };
 
@@ -192,26 +268,28 @@ export const backtestApi = {
 };
 
 export const logApi = {
-    getLogs: async (limit: number = 100, offset: number = 0) => {
-        const { data } = await apiClient.get<LogEntry[]>('/logs/', { params: { limit, offset } });
+    getLogs: async (accountId: string, limit: number = 100, offset: number = 0) => {
+        const { data } = await apiClient.get<LogEntry[]>(`/accounts/${accountId}/logs/system`, { params: { limit, offset } });
         return data;
     },
-    getTrades: async (limit: number = 100, symbol?: string, offset: number = 0) => {
-        const { data } = await apiClient.get<any[]>('/logs/trades', { params: { limit, symbol, offset } });
+    getTrades: async (accountId: string, limit: number = 100, symbol?: string, offset: number = 0) => {
+        const { data } = await apiClient.get<any[]>(`/accounts/${accountId}/logs/trades`, { params: { limit, symbol, offset } });
         return data;
     },
-    getSignals: async (limit: number = 100, symbol?: string, offset: number = 0) => {
-        const { data } = await apiClient.get<any[]>('/logs/signals', { params: { limit, symbol, offset } });
+    getSignals: async (accountId: string, limit: number = 100, symbol?: string, offset: number = 0) => {
+        const { data } = await apiClient.get<any[]>(`/accounts/${accountId}/logs/signals`, { params: { limit, symbol, offset } });
         return data;
     }
 };
 
 export const statisticsApi = {
-    getUnrealizedIncome: async () => {
-        const { data } = await apiClient.get<{symbol: string, income: number, qty: number}[]>('/statistics/unrealized-income');
+    getUnrealizedIncome: async (accountId: string) => {
+        const { data } = await apiClient.get<{symbol: string, income: number, qty: number}[]>('/statistics/unrealized-income', {
+          params: { account_id: accountId }
+        });
         return data;
     },
-    getEquityPerformance: async (symbol: string, period: string = '1M', type: string = 'nominal') => {
+    getEquityPerformance: async (symbol: string, period: string = '1M', type: string = 'nominal', accountId?: string) => {
         const { data } = await apiClient.get<{data: Array<{
             date: string, 
             price: number, 
@@ -222,7 +300,7 @@ export const statisticsApi = {
             total_bought?: number,
             total_sold?: number
         }>}>(`/statistics/equity-performance/${symbol}`, {
-            params: { period, type }
+            params: { period, type, ...(accountId ? { account_id: accountId } : {}) }
         });
         return data.data;
     }

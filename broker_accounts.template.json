@@ -1,0 +1,111 @@
+[
+  {
+    "external_id": "kis-live-1",
+    "name": "kis-live-1",
+    "broker_type": "kis",
+    "credentials": {
+      "app_key": "KIS_LIVE_APP_KEY (실전 앱키)",
+      "app_secret": "KIS_LIVE_APP_SECRET (실전 앱시크릿)",
+      "cano": "12345678 (계좌 앞 8자리)",
+      "acnt_prdt_cd": "01 (계좌상품코드 2자리)"
+    },
+    "config": {
+      "base_url": "https://openapi.koreainvestment.com:9443",
+      "is_paper": false,
+      "us_exchange": "NASD",
+      "us_price_excd": "NAS",
+      "us_currency": "USD",
+      "description": "KIS 실전계좌 #1 (예: US swing / conservative)",
+      "us_exchanges": [
+        "NASD",
+        "NYSE"
+      ],
+      "allowed_markets": [
+        "NASDAQ",
+        "NYSE"
+      ]
+    }
+  },
+  {
+    "external_id": "kis-paper-1",
+    "name": "kis-paper-1",
+    "broker_type": "kis",
+    "credentials": {
+      "app_key": "KIS_PAPER_APP_KEY (모의 앱키)",
+      "app_secret": "KIS_PAPER_APP_SECRET (모의 앱시크릿)",
+      "cano": "87654321 (모의 계좌 앞 8자리)",
+      "acnt_prdt_cd": "01"
+    },
+    "config": {
+      "base_url": "https://openapivts.koreainvestment.com:29443",
+      "is_paper": true,
+      "us_exchange": "NASD",
+      "us_price_excd": "NAS",
+      "us_currency": "USD",
+      "description": "KIS 모의계좌 #1 (전략 검증용)",
+      "us_exchanges": [
+        "NASD",
+        "NYSE"
+      ],
+      "allowed_markets": [
+        "NASDAQ",
+        "NYSE"
+      ]
+    }
+  },
+  {
+    "external_id": "alpaca-live-1",
+    "name": "alpaca-live-1",
+    "broker_type": "alpaca",
+    "credentials": {
+      "api_key": "ALPACA_LIVE_API_KEY (live key)",
+      "secret_key": "ALPACA_LIVE_SECRET_KEY (live secret)"
+    },
+    "config": {
+      "base_url": "https://api.alpaca.markets",
+      "description": "Alpaca 실전계좌 #1",
+      "allowed_markets": [
+        "NASDAQ",
+        "NYSE"
+      ]
+    }
+  },
+  {
+    "external_id": "alpaca-paper-1",
+    "name": "alpaca-paper-1",
+    "broker_type": "alpaca",
+    "credentials": {
+      "api_key": "ALPACA_PAPER_API_KEY (paper key)",
+      "secret_key": "ALPACA_PAPER_SECRET_KEY (paper secret)"
+    },
+    "config": {
+      "base_url": "https://paper-api.alpaca.markets",
+      "description": "Alpaca paper계좌 #1",
+      "allowed_markets": [
+        "NASDAQ",
+        "NYSE"
+      ]
+    }
+  },
+  {
+    "external_id": "kis-kr-paper-1",
+    "name": "kis-kr-paper-1",
+    "broker_type": "kis_kr",
+    "credentials": {
+      "app_key": "KIS_KR_PAPER_APP_KEY (국내 모의 앱키)",
+      "app_secret": "KIS_KR_PAPER_APP_SECRET (국내 모의 앱시크릿)",
+      "cano": "87654321 (모의 계좌 앞 8자리)",
+      "acnt_prdt_cd": "01"
+    },
+    "config": {
+      "base_url": "https://openapivts.koreainvestment.com:29443",
+      "is_paper": true,
+      "market": "KRX",
+      "allowed_markets": [
+        "KOSPI",
+        "KOSDAQ"
+      ],
+      "description": "KIS 국내 모의계좌 #1 (KRX)"
+    }
+  }
+]

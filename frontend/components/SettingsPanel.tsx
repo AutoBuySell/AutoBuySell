@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
-import { backtestApi } from '@/lib/api';
+import { accountSettingsApi, backtestApi, watchlistApi } from '@/lib/api';
 
 interface StrategyMeta {
     name: string;
@@ -14,7 +14,7 @@ interface StrategyParams {
     [key: string]: any;
 }
 
-export default function SettingsPanel() {
+export default function SettingsPanel({ accountId }: { accountId?: string }) {
     const [strategies, setStrategies] = useState<StrategyMeta[]>([]);
     const [selectedStrategy, setSelectedStrategy] = useState<string>('');
     
@@ -29,7 +29,7 @@ export default function SettingsPanel() {
     useEffect(() => {
         fetchStrategies();
         fetchSymbols();
-    }, []);
+    }, [accountId]);
     
     useEffect(() => {
         if (selectedStrategy) {
@@ -51,11 +51,12 @@ export default function SettingsPanel() {
     
     const fetchSymbols = async () => {
         try {
-            // Using dataApi directly here logic? or import? 
-            // We need to import dataApi. Assume it is available in ../lib/api
-            const { dataApi } = require('@/lib/api'); // Dynamic import hack or fix import
-            const syms = await dataApi.getSymbols(true);
-            setSymbols(syms.map((s: any) => s.ticker));
+            if (!accountId) {
+                setSymbols([]);
+                return;
+            }
+            const syms = await watchlistApi.list(accountId);
+            setSymbols((syms || []).filter((s: any) => s.is_active).map((s: any) => s.symbol));
         } catch (e) {
             console.error('Failed to fetch symbols', e);
         }
@@ -70,13 +71,17 @@ export default function SettingsPanel() {
         setLoading(true);
         try {
             // 1. Fetch Defaults (Always)
-            const defData = await backtestApi.getStrategyParams(selectedStrategy, null);
+            if (!accountId) {
+                setStatusMsg('No account selected');
+                return;
+            }
+            const defData = await accountSettingsApi.getStrategyParams(accountId, selectedStrategy, null);
             const defaults = defData ? defData.params : {};
             setDefaultParams(defaults);
 
             // 2. Fetch Override if scope is not default
             if (scope !== 'default') {
-                const overrideData = await backtestApi.getStrategyParams(selectedStrategy, scope);
+                const overrideData = await accountSettingsApi.getStrategyParams(accountId, selectedStrategy, scope);
                 if (overrideData) {
                     setParams(overrideData.params);
                     setStatusMsg(`Loaded override for ${scope} (v${overrideData.version})`);
@@ -108,7 +113,8 @@ export default function SettingsPanel() {
         setLoading(true);
         try {
             const targetSymbol = scope === 'default' ? null : scope;
-            await backtestApi.updateStrategyParams(selectedStrategy, params, targetSymbol);
+            if (!accountId) return;
+            await accountSettingsApi.updateStrategyParams(accountId, selectedStrategy, params, targetSymbol);
             setStatusMsg('Settings saved successfully.');
             // Reload to confirm?
             setTimeout(() => setStatusMsg(''), 3000);

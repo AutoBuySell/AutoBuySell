@@ -2,7 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
-import { tradingApi, AccountInfo, Position } from "@/lib/api";
+import { tradingApi, accountsApi, AccountInfo, Position } from "@/lib/api";
+import { useSelectedAccountId } from "@/lib/accountScope";
+import { formatMoney } from "@/lib/format";
 import { wsClient } from "@/lib/websocket";
 import SymbolManager from "@/components/SymbolManager";
 import SettingsPanel from "@/components/SettingsPanel";
@@ -13,36 +15,69 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState<Tab>('overview');
   const [account, setAccount] = useState<AccountInfo | null>(null);
   const [positions, setPositions] = useState<Position[]>([]);
+  const [status, setStatus] = useState<any>(null);
+  const [selectedAccountId, setSelectedAccountId] = useSelectedAccountId();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchData = async () => {
+  const fetchData = async (accountId?: string) => {
       try {
-        const [accData, posData] = await Promise.all([
-          tradingApi.getAccount(),
-          tradingApi.getPositions(),
+        const [accountsData, statusData] = await Promise.all([
+          accountsApi.list(true),
+          tradingApi.getGlobalStatus(),
         ]);
-        setAccount(accData);
-        setPositions(posData);
-      } catch (err) {
-        console.error("Failed to fetch data", err);
-        setError("Failed to connect to Trading API. Check console.");
+
+        setStatus(statusData);
+
+        const effectiveAccountId = accountId || selectedAccountId;
+
+        if (!effectiveAccountId) {
+          // Initial app entry can race before account scope is hydrated.
+          // Auto-pick first active account and wait for next effect cycle.
+          if (accountsData && accountsData.length > 0) {
+            setSelectedAccountId(accountsData[0].id);
+          }
+          setAccount(null);
+          setPositions([]);
+          setError(null);
+          return;
+        }
+
+        try {
+          const [accData, posData] = await Promise.all([
+            tradingApi.getAccount(effectiveAccountId),
+            tradingApi.getPositions(effectiveAccountId),
+          ]);
+          setAccount(accData);
+          setPositions(posData);
+          setError(null);
+        } catch (accountErr: any) {
+          const detail = accountErr?.response?.data?.detail || accountErr?.message || 'Unknown account API error';
+          console.error('Account-scoped fetch failed', accountErr);
+          setAccount(null);
+          setPositions([]);
+          setError(`Selected account API error: ${detail}`);
+        }
+      } catch (err: any) {
+        const detail = err?.response?.data?.detail || err?.message || 'Unknown error';
+        console.error("Failed to fetch dashboard data", err);
+        setError(`Failed to connect to Trading API: ${detail}`);
       } finally {
         setLoading(false);
       }
     };
 
   useEffect(() => {
-    fetchData();
+    fetchData(selectedAccountId);
     wsClient.connect();
     const unsubscribe = wsClient.subscribe((msg: any) => {
         if (msg.type === 'ORDER_FILLED') {
             console.log("Trade detected, refreshing data...");
-            fetchData();
+            fetchData(selectedAccountId);
         }
     });
     return () => { unsubscribe(); };
-  }, []);
+  }, [selectedAccountId]);
 
   if (loading) return <div className="p-8">Loading Dashboard...</div>;
 
@@ -65,6 +100,29 @@ export default function Home() {
         ))}
       </div>
 
+      {/* Current account banner (always visible) */}
+      {(() => {
+        const current = status?.accounts?.find((a: any) => a.account_id === selectedAccountId) || status?.accounts?.[0];
+        const mode = account ? (account.is_paper ? 'PAPER' : 'LIVE') : '-';
+        return (
+          <Card className="border-blue-200 bg-blue-50/40">
+            <CardContent className="py-3">
+              <div className="text-sm font-semibold">
+                Current Account: {current?.account_name || 'N/A'}
+              </div>
+              <div className="text-xs text-muted-foreground mt-1">
+                Broker: {current?.broker || '-'} · Mode: {mode}
+              </div>
+              {current?.account_description && (
+                <div className="text-xs text-muted-foreground mt-1">
+                  {current.account_description}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        );
+      })()}
+
       {/* Tab Content */}
       {activeTab === 'overview' && (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
@@ -74,10 +132,10 @@ export default function Home() {
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">
-                {account ? `$${account.portfolio_value.toLocaleString()}` : 'N/A'}
+                {account ? formatMoney(account.portfolio_value, account.currency) : 'N/A'}
               </div>
               <p className="text-xs text-muted-foreground">
-                Cash: {account ? `$${account.cash.toLocaleString()}` : '-'}
+                Buying Power: {account ? formatMoney(account.buying_power, account.currency) : '-'}
               </p>
               <p className="text-xs text-muted-foreground mt-1">
                 Mode: {account ? (account.is_paper ? 'Paper' : 'Live') : '-'}
@@ -108,7 +166,7 @@ export default function Home() {
                     return (
                         <>
                             <div className={`text-2xl font-bold ${colorClass}`}>
-                                ${totalPl.toLocaleString()}
+                                {formatMoney(totalPl, account?.currency)}
                             </div>
                              <p className="text-xs text-muted-foreground">Across all positions</p>
                         </>
@@ -117,7 +175,7 @@ export default function Home() {
             </CardContent>
           </Card>
 
-          <SystemStatusCard />
+          <SystemStatusCard accountId={selectedAccountId} />
 
           {error && (
             <div className="col-span-4 p-4 text-red-500 bg-red-100 rounded">
@@ -151,9 +209,9 @@ export default function Home() {
                           <tr key={p.symbol} className="border-b last:border-0">
                             <td className="py-2 font-medium">{p.symbol}</td>
                             <td className="py-2 text-right">{p.qty}</td>
-                            <td className="py-2 text-right">${p.market_value.toLocaleString()}</td>
+                            <td className="py-2 text-right">{formatMoney(p.market_value, account?.currency)}</td>
                             <td className={`py-2 text-right ${p.unrealized_pl >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                              ${p.unrealized_pl.toLocaleString()}
+                              {formatMoney(p.unrealized_pl, account?.currency)}
                             </td>
                           </tr>
                         ))}
@@ -166,24 +224,25 @@ export default function Home() {
         </div>
       )}
 
-      {activeTab === 'watchlist' && <SymbolManager />}
-      {activeTab === 'settings' && <SettingsPanel />}
+      {activeTab === 'watchlist' && <SymbolManager accountId={selectedAccountId} />}
+      {activeTab === 'settings' && <SettingsPanel accountId={selectedAccountId} />}
     </div>
   );
 }
 
-function SystemStatusCard() {
+function SystemStatusCard({ accountId }: { accountId?: string }) {
     const [status, setStatus] = useState<any>(null);
     const [loading, setLoading] = useState(false);
 
     useEffect(() => {
         refreshStatus();
         // No auto-polling - user controls refresh
-    }, []);
+    }, [accountId]);
 
     const refreshStatus = async () => {
         try {
-            const data = await tradingApi.getStatus();
+            if (!accountId) return;
+            const data = await tradingApi.getStatus(accountId);
             setStatus(data);
         } catch (e) { console.error(e); }
     };
@@ -191,10 +250,11 @@ function SystemStatusCard() {
     const toggleTrading = async () => {
         setLoading(true);
         try {
+            if (!accountId) return;
             if (status?.is_running) {
-                await tradingApi.stop();
+                await tradingApi.stop(accountId);
             } else {
-                await tradingApi.start();
+                await tradingApi.start(accountId);
             }
             await refreshStatus();
         } catch (e) {
@@ -207,7 +267,8 @@ function SystemStatusCard() {
     const handleStrategyChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
         const newStrategy = e.target.value;
         try {
-            await tradingApi.setStrategy(newStrategy);
+            if (!accountId) return;
+            await tradingApi.setStrategy(newStrategy, accountId);
             await refreshStatus();
         } catch (err) {
             console.error("Failed to change strategy", err);

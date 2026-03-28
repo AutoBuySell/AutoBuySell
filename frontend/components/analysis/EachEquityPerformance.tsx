@@ -3,12 +3,12 @@
 import { useEffect, useState } from 'react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import { statisticsApi, dataApi } from '@/lib/api';
+import { statisticsApi, tradingApi, watchlistApi } from '@/lib/api';
 import { 
     LineChart, Line, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer 
 } from 'recharts';
 
-export default function EachEquityPerformance() {
+export default function EachEquityPerformance({ accountId }: { accountId?: string }) {
     const [symbols, setSymbols] = useState<string[]>([]);
     const [selectedSymbol, setSelectedSymbol] = useState<string>('');
     const [period, setPeriod] = useState('1M');
@@ -18,7 +18,7 @@ export default function EachEquityPerformance() {
 
     useEffect(() => {
         loadSymbols();
-    }, []);
+    }, [accountId]);
 
     useEffect(() => {
         if (selectedSymbol) {
@@ -28,10 +28,19 @@ export default function EachEquityPerformance() {
 
     const loadSymbols = async () => {
         try {
-            const syms = await dataApi.getSymbols(true);
-            const tickers = syms.map((s: any) => s.ticker);
+            const [watchlistSymbols, positions] = await Promise.all([
+                accountId ? watchlistApi.list(accountId) : Promise.resolve([]),
+                accountId ? tradingApi.getPositions(accountId) : Promise.resolve([]),
+            ]);
+            const watchlistTickers = (watchlistSymbols || []).filter((s: any) => s.is_active).map((s: any) => s.symbol);
+            const positionTickers = (positions || []).map((p: any) => p.symbol).filter(Boolean);
+            const tickers = Array.from(new Set([...watchlistTickers, ...positionTickers])).sort();
+
             setSymbols(tickers);
-            if (tickers.length > 0) setSelectedSymbol(tickers[0]);
+            if (tickers.length > 0) {
+                // Prefer current selection if still available
+                setSelectedSymbol(prev => tickers.includes(prev) ? prev : tickers[0]);
+            }
         } catch (e) {
             console.error(e);
         }
@@ -40,7 +49,7 @@ export default function EachEquityPerformance() {
     const loadData = async () => {
         setLoading(true);
         try {
-            const res = await statisticsApi.getEquityPerformance(selectedSymbol, period, 'nominal');
+            const res = await statisticsApi.getEquityPerformance(selectedSymbol, period, 'nominal', accountId);
             setData(res ?? []);
         } catch (e) {
             console.error("Failed to load equity performance", e);
@@ -50,12 +59,31 @@ export default function EachEquityPerformance() {
         }
     };
 
+    const getPaddedDomain = (values: number[], padRatio: number = 0.05): [number, number] => {
+        if (!values.length) return [0, 1];
+        const min = Math.min(...values);
+        const max = Math.max(...values);
+        const span = max - min;
+        if (span === 0) {
+            const base = Math.max(Math.abs(max), 1);
+            return [min - base * padRatio, max + base * padRatio];
+        }
+        const pad = span * padRatio;
+        return [min - pad, max + pad];
+    };
+
     const commonTooltipStyle = {
         backgroundColor: 'rgba(255, 255, 255, 0.95)',
         border: '1px solid #ccc',
         borderRadius: '4px',
         color: '#000'
     };
+
+    const priceDomain = getPaddedDomain((data || []).map((d) => Number(d.price || 0)));
+    const qtyDomain = getPaddedDomain((data || []).map((d) => Number(d.qty || 0)));
+    const unrealizedDomain = getPaddedDomain((data || []).map((d) => Number(d.unrealized_income || 0)));
+    const nominalDomain = getPaddedDomain((data || []).map((d) => Number(d.nominal_income || 0)));
+    const realizedDomain = getPaddedDomain((data || []).map((d) => Number(d.realized_income || 0)));
 
     const NoDataMessage = () => (
         <div className="flex h-full items-center justify-center text-muted-foreground">
@@ -114,11 +142,12 @@ export default function EachEquityPerformance() {
                                         axisLine={false} 
                                     />
                                     <YAxis 
+                                        domain={priceDomain}
                                         stroke="#888888" 
                                         fontSize={12} 
                                         tickLine={false} 
                                         axisLine={false}
-                                        tickFormatter={(val) => `$${val}`}
+                                        tickFormatter={(val) => `$${Number(val).toFixed(1)}`}
                                     />
                                     <Tooltip 
                                         labelFormatter={(label) => label.split('T')[0]}
@@ -153,6 +182,7 @@ export default function EachEquityPerformance() {
                                         axisLine={false} 
                                     />
                                     <YAxis 
+                                        domain={qtyDomain}
                                         stroke="#888888" 
                                         fontSize={12} 
                                         tickLine={false} 
@@ -196,11 +226,12 @@ export default function EachEquityPerformance() {
                                         axisLine={false} 
                                     />
                                     <YAxis 
+                                        domain={unrealizedDomain}
                                         stroke="#888888" 
                                         fontSize={12} 
                                         tickLine={false} 
                                         axisLine={false}
-                                        tickFormatter={(val) => `$${val}`}
+                                        tickFormatter={(val) => `$${Number(val).toFixed(1)}`}
                                     />
                                     <Tooltip 
                                         labelFormatter={(label) => label.split('T')[0]}
@@ -236,11 +267,12 @@ export default function EachEquityPerformance() {
                                         axisLine={false} 
                                     />
                                     <YAxis 
+                                        domain={nominalDomain}
                                         stroke="#888888" 
                                         fontSize={12} 
                                         tickLine={false} 
                                         axisLine={false}
-                                        tickFormatter={(val) => `$${val}`}
+                                        tickFormatter={(val) => `$${Number(val).toFixed(1)}`}
                                     />
                                     <Tooltip 
                                         labelFormatter={(label) => label.split('T')[0]}
@@ -276,11 +308,12 @@ export default function EachEquityPerformance() {
                                         axisLine={false} 
                                     />
                                     <YAxis 
+                                        domain={realizedDomain}
                                         stroke="#888888" 
                                         fontSize={12} 
                                         tickLine={false} 
                                         axisLine={false}
-                                        tickFormatter={(val) => `$${val}`}
+                                        tickFormatter={(val) => `$${Number(val).toFixed(1)}`}
                                     />
                                     <Tooltip 
                                         labelFormatter={(label) => label.split('T')[0]}

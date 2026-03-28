@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { backtestApi, BacktestRun, BacktestResult, dataApi, SymbolInfo, tradingApi, PortfolioHistory, Position } from '@/lib/api';
+import { useSelectedAccountId } from '@/lib/accountScope';
 import { wsClient } from '@/lib/websocket';
 import { 
     ComposedChart, Line, AreaChart, Area, PieChart, Pie, Cell, 
@@ -12,6 +13,7 @@ import {
 import NominalIncomes from '@/components/analysis/NominalIncomes';
 import EachEquityPerformance from '@/components/analysis/EachEquityPerformance';
 import Transactions from '@/components/analysis/Transactions';
+import { formatMoney } from '@/lib/format';
 
 const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#82ca9d'];
 
@@ -39,6 +41,8 @@ export default function AnalysisPage() {
   });
   const [loading, setLoading] = useState(false);
   const [isDownloadingData, setIsDownloadingData] = useState(false);
+  const [paramJson, setParamJson] = useState('');
+  const [backtestError, setBacktestError] = useState<string | null>(null);
   
   // -- Download Confirmation Modal State --
   const [showDownloadModal, setShowDownloadModal] = useState(false);
@@ -52,7 +56,9 @@ export default function AnalysisPage() {
   // -- Live Analysis State --
   const [history, setHistory] = useState<PortfolioHistory | null>(null);
   const [positions, setPositions] = useState<Position[]>([]);
+  const [currency, setCurrency] = useState<string>('USD');
   const [historyPeriod, setHistoryPeriod] = useState('1M');
+  const [selectedAccountId] = useSelectedAccountId();
 
   useEffect(() => {
     loadInitialData();
@@ -80,10 +86,10 @@ export default function AnalysisPage() {
   }, []);
 
   useEffect(() => {
-      if (activeTab === 'live') {
+      if (activeTab === 'live' && selectedAccountId) {
           loadLiveData();
       }
-  }, [activeTab, historyPeriod]);
+  }, [activeTab, historyPeriod, selectedAccountId]);
 
 
   useEffect(() => {
@@ -92,14 +98,31 @@ export default function AnalysisPage() {
       }
   }, [strategies, form.strategy]);
 
+  useEffect(() => {
+      const loadDefaultParams = async () => {
+          if (!form.strategy) return;
+          try {
+              const p = await backtestApi.getStrategyParams(form.strategy);
+              if (p?.params) {
+                  setParamJson(JSON.stringify(p.params, null, 2));
+              } else {
+                  setParamJson('{}');
+              }
+          } catch {
+              setParamJson('{}');
+          }
+      };
+      loadDefaultParams();
+  }, [form.strategy]);
+
   const loadInitialData = async () => {
     try {
         const strats = await backtestApi.getStrategies();
         setStrategies(strats.map(s => s.name));
-        
+
         const syms = await dataApi.getSymbols();
         setSymbols(syms);
-        
+
         loadRuns();
     } catch (e) {
         console.error("Failed to load init data", e);
@@ -115,17 +138,23 @@ export default function AnalysisPage() {
 
   const loadLiveData = async () => {
       try {
-          const hist = await tradingApi.getHistory(historyPeriod, '1D');
+          if (!selectedAccountId) return;
+          const [hist, pos, acc] = await Promise.all([
+              tradingApi.getHistory(historyPeriod, '1D', selectedAccountId),
+              tradingApi.getPositions(selectedAccountId),
+              tradingApi.getAccount(selectedAccountId),
+          ]);
           setHistory(hist);
-          
-          const pos = await tradingApi.getPositions();
           setPositions(pos);
+          setCurrency(acc?.currency || 'USD');
       } catch (e) {
           console.error("Failed to load live data", e);
       }
   };
 
   const handleRun = async () => {
+      setBacktestError(null);
+
       // Validate BEFORE setting loading state
       const symbolsList = form.symbol.split(',').map(s => s.trim()).filter(s => s.length > 0);
 
@@ -205,17 +234,26 @@ export default function AnalysisPage() {
   const executeBacktest = async (symbolsList: string[]) => {
       setLoading(true);
       try {
+          let parsedParams: Record<string, any> = {};
+          try {
+              parsedParams = paramJson?.trim() ? JSON.parse(paramJson) : {};
+          } catch {
+              setBacktestError('Backtest params JSON 형식이 올바르지 않습니다.');
+              return;
+          }
+
           await backtestApi.run({
               strategy_name: form.strategy,
-              symbols: symbolsList, 
+              symbols: symbolsList,
               start_date: form.startDate,
               end_date: form.endDate,
               initial_capital: typeof form.initialCapital === 'number' ? form.initialCapital : (parseInt(form.initialCapital as string) || 10000),
-              params: {}
+              params: parsedParams
           });
           setTimeout(loadRuns, 500);
-      } catch (e) {
-          alert('Failed to start backtest');
+      } catch (e: any) {
+          const detail = e?.response?.data?.detail;
+          setBacktestError(detail || 'Failed to start backtest');
       } finally {
           setLoading(false);
       }
@@ -230,6 +268,19 @@ export default function AnalysisPage() {
       }
   };
 
+  const getPaddedDomain = (values: number[], padRatio: number = 0.05): [number, number] => {
+      if (!values.length) return [0, 1];
+      const min = Math.min(...values);
+      const max = Math.max(...values);
+      const span = max - min;
+      if (span === 0) {
+          const base = Math.max(Math.abs(max), 1);
+          return [min - base * padRatio, max + base * padRatio];
+      }
+      const pad = span * padRatio;
+      return [min - pad, max + pad];
+  };
+
   // Prepare Pie Data
   const pieData = positions.map(p => ({
       name: p.symbol,
@@ -241,6 +292,7 @@ export default function AnalysisPage() {
       time: new Date(t * 1000).toLocaleDateString(),
       equity: history.equity[i]
   })) || [];
+  const liveEquityDomain = getPaddedDomain(equityData.map((d) => Number(d.equity || 0)));
 
   const equityCurveRaw = selectedRun?.result?.equity_curve || [];
   const trades = selectedRun?.result?.metrics?.trades || [];
@@ -282,6 +334,14 @@ export default function AnalysisPage() {
       })
       .filter((point) => Number.isFinite(point.timeMs))
       .sort((a, b) => a.timeMs - b.timeMs);
+  const backtestEquityDomain = getPaddedDomain(
+      equityCurve.map((p: any) => Number(p.equity || 0)).filter((v: number) => Number.isFinite(v))
+  );
+  const backtestPriceValues = equityCurve
+      .map((p: any) => Number(p.price))
+      .filter((v: number) => Number.isFinite(v) && v > 0);
+  const hasBacktestPrice = backtestPriceValues.length > 0;
+  const backtestPriceDomain = hasBacktestPrice ? getPaddedDomain(backtestPriceValues) : [0, 1];
 
   const renderEventDot = (props: any) => {
       const { cx, cy, payload } = props;
@@ -346,7 +406,12 @@ export default function AnalysisPage() {
                       ))}
                   </div>
               ) : (
-                  <div className="mt-1">Equity: ${Number(point.equity).toFixed(2)}</div>
+                  <div className="mt-1 space-y-1">
+                      <div>Equity: ${Number(point.equity).toFixed(2)}</div>
+                      {point.price != null && (
+                          <div>Price ({point.price_symbol || 'symbol'}): ${Number(point.price).toFixed(2)}</div>
+                      )}
+                  </div>
               )}
           </div>
       );
@@ -384,7 +449,7 @@ export default function AnalysisPage() {
       </div>
       
       {activeTab === 'backtest' ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="grid grid-cols-1 gap-6">
             {/* Configuration Panel */}
             <Card>
                 <CardHeader>
@@ -455,6 +520,25 @@ export default function AnalysisPage() {
                             step="1000"
                         />
                     </div>
+
+                    <div>
+                        <label className="block text-sm font-medium mb-1">Backtest Params (JSON)</label>
+                        <textarea
+                            className="w-full p-2 rounded border bg-background font-mono text-xs h-44"
+                            value={paramJson}
+                            onChange={e => setParamJson(e.target.value)}
+                            placeholder='{"target_value": 1000, "timeframe": "30Min"}'
+                        />
+                        <p className="text-xs text-muted-foreground mt-1">
+                            운영 파라미터와 독립적으로 백테스트 전용 파라미터를 지정할 수 있어.
+                        </p>
+                    </div>
+
+                    {backtestError && (
+                        <div className="p-2 text-sm text-red-600 bg-red-50 border border-red-200 rounded">
+                            {backtestError}
+                        </div>
+                    )}
     
                     <button 
                         className="w-full py-2 bg-primary text-primary-foreground rounded hover:opacity-90 disabled:opacity-50"
@@ -489,6 +573,7 @@ export default function AnalysisPage() {
                                     <tr>
                                         <th className="p-2">Sym</th>
                                         <th className="p-2">Status</th>
+                                        <th className="p-2">Reason</th>
                                         <th className="p-2">Action</th>
                                     </tr>
                                 </thead>
@@ -503,6 +588,9 @@ export default function AnalysisPage() {
                                                 }`}>
                                                     {run.status}
                                                 </span>
+                                            </td>
+                                            <td className="p-2 text-xs text-muted-foreground max-w-[220px] truncate" title={run.error_message || ''}>
+                                                {run.status === 'FAILED' ? (run.error_message || '-') : '-'}
                                             </td>
                                             <td className="p-2">
                                                 <button 
@@ -545,9 +633,20 @@ export default function AnalysisPage() {
                                     <div className="text-xl font-bold">{selectedRun.run.status}</div>
                                 </div>
                             </div>
+
+                            {selectedRun.run.status === 'FAILED' && selectedRun.run.error_message && (
+                                <div className="p-3 text-sm text-red-700 bg-red-50 border border-red-200 rounded">
+                                    <strong>Failure reason:</strong> {selectedRun.run.error_message}
+                                </div>
+                            )}
     
                             <div className="h-[400px] w-full border rounded p-2 flex flex-col">
                                 <div className="flex items-center gap-4 px-2 pb-2 text-sm">
+                                    {!hasBacktestPrice && (
+                                        <span className="text-xs text-amber-600">
+                                            Price line unavailable for this run (created before price-overlay patch). Run a new backtest to display price.
+                                        </span>
+                                    )}
                                     <label className="flex items-center gap-2">
                                         <input
                                             type="checkbox"
@@ -583,14 +682,26 @@ export default function AnalysisPage() {
                                             axisLine={false}
                                         />
                                         <YAxis 
-                                            domain={['auto', 'auto']}
+                                            domain={backtestEquityDomain}
                                             yAxisId="main"
-                                            stroke="#888888"
+                                            stroke="#2563eb"
                                             fontSize={12}
                                             tickLine={false}
                                             axisLine={false}
-                                            tickFormatter={(value) => `$${value}`}
+                                            tickFormatter={(value) => `$${Number(value).toFixed(1)}`}
                                         />
+                                        {hasBacktestPrice && (
+                                            <YAxis
+                                                domain={backtestPriceDomain}
+                                                yAxisId="price"
+                                                orientation="right"
+                                                stroke="#f59e0b"
+                                                fontSize={12}
+                                                tickLine={false}
+                                                axisLine={false}
+                                                tickFormatter={(value) => `$${Number(value).toFixed(1)}`}
+                                            />
+                                        )}
                                         <Tooltip 
                                             content={renderTooltip}
                                         />
@@ -604,7 +715,23 @@ export default function AnalysisPage() {
                                             dot={false}
                                             activeDot={!(showSignals || showOrders)}
                                             isAnimationActive={false}
+                                            name="Equity"
                                         />
+                                        {hasBacktestPrice && (
+                                            <Line
+                                                type="monotone"
+                                                dataKey="price"
+                                                xAxisId="main"
+                                                yAxisId="price"
+                                                stroke="#f59e0b"
+                                                strokeWidth={2}
+                                                dot={false}
+                                                activeDot={false}
+                                                isAnimationActive={false}
+                                                connectNulls
+                                                name="Price"
+                                            />
+                                        )}
                                         <Line
                                             type="monotone"
                                             dataKey="equity"
@@ -668,12 +795,12 @@ export default function AnalysisPage() {
                                                axisLine={false}
                                            />
                                            <YAxis 
-                                                domain={['auto', 'auto']}
+                                                domain={liveEquityDomain}
                                                 stroke="#888888"
                                                 fontSize={12}
                                                 tickLine={false}
                                                 axisLine={false}
-                                                tickFormatter={(value) => `$${value}`}
+                                                tickFormatter={(value) => `$${Number(value).toFixed(1)}`}
                                            />
                                            <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
                                            <Tooltip 
@@ -697,12 +824,12 @@ export default function AnalysisPage() {
                   </Card>
     
                   {/* Nominal Incomes Bar Chart */}
-                  <NominalIncomes refreshTrigger={refreshTrigger} />
+                  <NominalIncomes accountId={selectedAccountId} refreshTrigger={refreshTrigger} />
               </div>
 
               {/* Middle Row: Each Equity Performance (Full Width) */}
               <div className="grid grid-cols-1 gap-6">
-                   <EachEquityPerformance />
+                   <EachEquityPerformance accountId={selectedAccountId} />
               </div>
 
               {/* Portfolio Allocation Row */}
@@ -762,7 +889,7 @@ export default function AnalysisPage() {
                                    {positions.map(p => (
                                        <tr key={p.symbol} className="border-b last:border-0 hover:bg-muted/50">
                                            <td className="py-2">{p.symbol}</td>
-                                           <td className="py-2 text-right">${p.market_value.toLocaleString()}</td>
+                                           <td className="py-2 text-right">{formatMoney(p.market_value, currency)}</td>
                                            <td className={`py-2 text-right ${p.unrealized_plpc >= 0 ? 'text-green-500' : 'text-red-500'}`}>
                                                {(p.unrealized_plpc * 100).toFixed(2)}%
                                            </td>
@@ -779,7 +906,7 @@ export default function AnalysisPage() {
 
               {/* Bottom Row: Transactions */}
               <div className="grid grid-cols-1 gap-6">
-                  <Transactions limit={20} refreshTrigger={refreshTrigger} />
+                  <Transactions accountId={selectedAccountId} limit={20} refreshTrigger={refreshTrigger} />
               </div>
           </div>
       )}

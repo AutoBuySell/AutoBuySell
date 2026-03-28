@@ -7,18 +7,35 @@ import {
     BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell 
 } from 'recharts';
 
-export default function NominalIncomes({ refreshTrigger }: { refreshTrigger?: number }) {
+export default function NominalIncomes({ accountId, refreshTrigger }: { accountId?: string, refreshTrigger?: number }) {
     const [data, setData] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
         loadData();
         // No auto-polling - parent controls refresh
-    }, [refreshTrigger]);
+    }, [refreshTrigger, accountId]);
+
+    const getPaddedDomain = (values: number[], padRatio: number = 0.05): [number, number] => {
+        if (!values.length) return [0, 1];
+        const min = Math.min(...values);
+        const max = Math.max(...values);
+        const span = max - min;
+        if (span === 0) {
+            const base = Math.max(Math.abs(max), 1);
+            return [min - base * padRatio, max + base * padRatio];
+        }
+        const pad = span * padRatio;
+        return [min - pad, max + pad];
+    };
 
     const loadData = async () => {
         try {
-            const res = await statisticsApi.getUnrealizedIncome();
+            if (!accountId) {
+                setData([]);
+                return;
+            }
+            const res = await statisticsApi.getUnrealizedIncome(accountId);
             setData(res);
         } catch (e) {
             console.error("Failed to load unrealized income", e);
@@ -28,6 +45,8 @@ export default function NominalIncomes({ refreshTrigger }: { refreshTrigger?: nu
     };
 
     if (loading && data.length === 0) return <div>Loading Income Data...</div>;
+
+    const incomeDomain = getPaddedDomain(data.map((d) => Number(d.income || 0)));
 
     return (
         <Card>
@@ -48,11 +67,12 @@ export default function NominalIncomes({ refreshTrigger }: { refreshTrigger?: nu
                                     axisLine={false} 
                                 />
                                 <YAxis 
+                                    domain={incomeDomain}
                                     stroke="#888888" 
                                     fontSize={12} 
                                     tickLine={false} 
                                     axisLine={false}
-                                    tickFormatter={(val) => `$${val}`}
+                                    tickFormatter={(val) => `$${Number(val).toFixed(1)}`}
                                 />
                                 <Tooltip 
                                     cursor={{fill: 'transparent'}}
