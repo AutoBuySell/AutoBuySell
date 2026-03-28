@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import List
 from uuid import UUID
+import asyncio
+import hashlib
 import logging
 import traceback
 
@@ -59,6 +61,7 @@ class AccountWorker:
 
         self.start_point_ts: dict[str, datetime] = {}
         self.last_processed_bar_ts: dict[str, datetime] = {}
+        self._startup_jitter_applied = False
 
     # ── State persistence ──────────────────────────────────────────
 
@@ -116,6 +119,13 @@ class AccountWorker:
 
     async def run_cycle(self):
         """One trading cycle for this account."""
+        if not self._startup_jitter_applied:
+            # Deterministic per-account startup jitter to reduce first-burst API contention.
+            h = int(hashlib.sha256(str(self.account_id).encode()).hexdigest()[:8], 16)
+            jitter_sec = 0.2 + (h % 2400) / 1000.0  # 0.2s ~ 2.6s
+            await asyncio.sleep(jitter_sec)
+            self._startup_jitter_applied = True
+
         logger.info(f"=== [{self.account_name}] TRADING CYCLE STARTED ===")
         async with AsyncSessionLocal() as db:
             try:
