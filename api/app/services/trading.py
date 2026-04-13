@@ -50,6 +50,7 @@ class TradingCoordinator:
                 broker=broker,
                 execution=execution_service,
                 account_description=(acct.config or {}).get("description", ""),
+                account_config=(acct.config or {}),
             )
             self.workers[account_id] = worker
 
