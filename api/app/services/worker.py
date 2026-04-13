@@ -144,6 +144,7 @@ class AccountWorker:
                     return
 
                 account = await self.broker.get_account_info()
+                await self._sync_trades(db)
                 sync_ok = await self.sync_positions(db)
                 if not sync_ok:
                     logger.warning(
@@ -328,6 +329,7 @@ class AccountWorker:
             fills = await self.broker.get_trade_fills(limit=2000)
             synced_count = 0
             external_count = 0
+            orders_updated = 0
 
             for fill in fills:
                 if trade_sync_after and fill.executed_at < trade_sync_after:
@@ -354,6 +356,7 @@ class AccountWorker:
                     order = order_result.scalar_one_or_none()
                     if order:
                         source = "system"
+
 
                 effective_symbol = fill.symbol or (order.symbol if order else "")
                 if not effective_symbol:
@@ -400,9 +403,52 @@ class AccountWorker:
 
                 synced_count += 1
 
+            # Reconcile order fill status from ingested trades (covers past stale rows too).
+            open_orders = (
+                await db.execute(
+                    select(Order).where(
+                        Order.account_id == self.account_id,
+                        Order.status.in_(["new", "submitted", "pending_new", "accepted", "partially_filled"]),
+                    )
+                )
+            ).scalars().all()
+
+            for order in open_orders:
+                order_trades = (
+                    await db.execute(
+                        select(Trade).where(
+                            Trade.account_id == self.account_id,
+                            Trade.order_id == order.id,
+                        )
+                    )
+                ).scalars().all()
+                if not order_trades:
+                    continue
+
+                total_qty = sum(float(t.qty or 0.0) for t in order_trades)
+                total_notional = sum(float(t.qty or 0.0) * float(t.price or 0.0) for t in order_trades)
+                new_filled_qty = min(float(order.qty), total_qty) if float(order.qty or 0.0) > 0 else total_qty
+                new_avg_price = (total_notional / total_qty) if total_qty > 0 else order.filled_avg_price
+
+                changed = False
+                if float(order.filled_qty or 0.0) != float(new_filled_qty):
+                    order.filled_qty = float(new_filled_qty)
+                    changed = True
+                if new_avg_price and float(order.filled_avg_price or 0.0) != float(new_avg_price):
+                    order.filled_avg_price = float(new_avg_price)
+                    changed = True
+
+                target_status = "filled" if (float(order.qty or 0.0) > 0 and new_filled_qty >= float(order.qty)) else "partially_filled"
+                if order.status != target_status and new_filled_qty > 0:
+                    order.status = target_status
+                    changed = True
+
+                if changed:
+                    orders_updated += 1
+
             await db.commit()
             logger.info(
-                f"[{self.account_name}] Trade sync: {synced_count} new ({external_count} external)"
+                f"[{self.account_name}] Trade sync: {synced_count} new ({external_count} external, {orders_updated} orders updated)"
             )
         except Exception as e:
             logger.error(f"[{self.account_name}] Trade sync failed: {e}")
