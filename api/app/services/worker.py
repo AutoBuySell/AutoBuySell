@@ -49,12 +49,19 @@ class AccountWorker:
         broker: BrokerAdapter,
         execution: ExecutionService,
         account_description: str = "",
+        account_config: dict | None = None,
     ):
         self.account_id = account_id
         self.account_name = account_name
         self.broker = broker
         self.execution = execution
         self.account_description = account_description or ""
+        self.account_config = account_config or {}
+        self.allowed_markets = [
+            str(m).upper()
+            for m in self.account_config.get("allowed_markets", [])
+            if m
+        ]
 
         self.strategies = get_all_strategies()
         self.active_strategy_name = next(iter(self.strategies.keys()))
@@ -160,9 +167,7 @@ class AccountWorker:
                 if not symbols:
                     return
 
-                allowed_markets = [
-                    str(m).upper() for m in (self.broker_account.config or {}).get("allowed_markets", []) if m
-                ]
+                allowed_markets = self.allowed_markets
                 if allowed_markets:
                     sym_rows = (
                         await db.execute(select(Symbol).where(Symbol.ticker.in_(symbols)))
