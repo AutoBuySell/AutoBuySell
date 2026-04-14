@@ -21,9 +21,31 @@ class BrokerManager:
         """Create and store broker instances for all active accounts."""
         from app.brokers.factory import create_broker_for_account
 
+        required_methods = [
+            "get_name",
+            "get_account_info",
+            "get_positions",
+            "submit_order",
+            "cancel_order",
+            "get_market_status",
+            "get_historicals",
+            "get_portfolio_history",
+            "get_trade_fills",
+        ]
+
         for acct in accounts:
             try:
                 broker = create_broker_for_account(acct)
+
+                missing = [m for m in required_methods if not callable(getattr(broker, m, None))]
+                if missing:
+                    logger.error(
+                        "Broker for account '%s' is missing required adapter methods: %s",
+                        acct.name,
+                        ", ".join(missing),
+                    )
+                    continue
+
                 self._brokers[acct.id] = broker
                 self._accounts[acct.id] = acct
                 logger.info(
