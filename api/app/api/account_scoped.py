@@ -324,7 +324,7 @@ async def get_active_strategy_params(
     else:
         stmt = stmt.where(StrategyParam.symbol.is_(None))
 
-    row = (await db.execute(stmt.order_by(StrategyParam.version.desc()))).scalar_one_or_none()
+    row = (await db.execute(stmt.order_by(StrategyParam.version.desc()).limit(1))).scalars().first()
     if not row:
         raise HTTPException(status_code=404, detail="No active params found")
 
@@ -355,7 +355,7 @@ async def update_strategy_params(
     else:
         stmt = stmt.where(StrategyParam.symbol.is_(None))
 
-    latest = (await db.execute(stmt.order_by(StrategyParam.version.desc()))).scalar_one_or_none()
+    latest = (await db.execute(stmt.order_by(StrategyParam.version.desc()).limit(1))).scalars().first()
     new_version = 1 if not latest else latest.version + 1
 
     # deactivate existing active rows for same scope
