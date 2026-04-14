@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import random
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone, time as dtime
 from zoneinfo import ZoneInfo
-from typing import List, Optional
+from typing import Any, List, Optional
 
 import httpx
 
 from app.brokers.base import (
+    BrokerAdapter,
     AccountInfo,
     BrokerPosition,
     OrderRequest,
@@ -18,7 +20,17 @@ from app.brokers.base import (
 )
 
 
-class KISKRBroker:
+@dataclass
+class SimpleBar:
+    timestamp: datetime
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+
+
+class KISKRBroker(BrokerAdapter):
     """KIS Domestic (KRX) broker adapter (paper/live)."""
 
     def __init__(
@@ -325,6 +337,157 @@ class KISKRBroker:
         if now_kst.weekday() >= 5:
             return False
         return dtime(9, 0) <= now_kst.time() <= dtime(15, 30)
+
+    async def get_historicals(self, symbol: str, timeframe: str, limit: int) -> List[Any]:
+        """
+        KRX intraday/daily bars for strategy processing.
+
+        Root-cause fix note:
+        - Worker expects every broker adapter to implement get_historicals().
+        - KISKRBroker previously lacked this method, causing per-symbol runtime errors.
+        """
+        tf = (timeframe or "").lower()
+        safe_limit = max(int(limit or 1), 1)
+
+        # Daily bars
+        if tf in {"1d", "1day"}:
+            url = f"{self.base_url}/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice"
+            headers = await self._headers("FHKST03010100")
+            today = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y%m%d")
+            # Request wider range then trim locally.
+            start = (datetime.now(ZoneInfo("Asia/Seoul")) - timedelta(days=max(safe_limit * 3, 120))).strftime("%Y%m%d")
+            params = {
+                "FID_COND_MRKT_DIV_CODE": "J",
+                "FID_INPUT_ISCD": symbol,
+                "FID_INPUT_DATE_1": start,
+                "FID_INPUT_DATE_2": today,
+                "FID_PERIOD_DIV_CODE": "D",
+                "FID_ORG_ADJ_PRC": "0",
+            }
+
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                resp, data = await self._request_with_retry(client, "GET", url, headers=headers, params=params)
+                if resp.status_code >= 400:
+                    return []
+
+            rows = (data or {}).get("output2") or []
+            bars: List[SimpleBar] = []
+            for row in rows:
+                dt = str(row.get("stck_bsop_date", "") or "")
+                if len(dt) != 8:
+                    continue
+                try:
+                    ts = datetime.strptime(dt, "%Y%m%d").replace(tzinfo=ZoneInfo("Asia/Seoul")).astimezone(timezone.utc)
+                except Exception:
+                    continue
+
+                o = float(row.get("stck_oprc", 0) or 0)
+                h = float(row.get("stck_hgpr", 0) or 0)
+                l = float(row.get("stck_lwpr", 0) or 0)
+                c = float(row.get("stck_clpr", 0) or row.get("stck_prpr", 0) or 0)
+                v = float(row.get("acml_vol", 0) or row.get("cntg_vol", 0) or 0)
+                if c <= 0:
+                    continue
+                bars.append(SimpleBar(timestamp=ts, open=o or c, high=h or c, low=l or c, close=c, volume=v))
+
+            bars.sort(key=lambda b: b.timestamp)
+            return bars[-safe_limit:]
+
+        minute_map = {
+            "1min": 1,
+            "1m": 1,
+            "5min": 5,
+            "5m": 5,
+            "15min": 15,
+            "15m": 15,
+            "30min": 30,
+            "30m": 30,
+            "1hour": 60,
+            "1h": 60,
+        }
+        bucket_min = minute_map.get(tf)
+        if not bucket_min:
+            return []
+
+        # KIS KR intraday endpoint (1-minute feed). Aggregate to requested timeframe.
+        url = f"{self.base_url}/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice"
+        headers = await self._headers("FHKST03010200")
+        params = {
+            "FID_ETC_CLS_CODE": "",
+            "FID_COND_MRKT_DIV_CODE": "J",
+            "FID_INPUT_ISCD": symbol,
+            "FID_INPUT_HOUR_1": "",
+            "FID_PW_DATA_INCU_YN": "Y",
+        }
+
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp, data = await self._request_with_retry(client, "GET", url, headers=headers, params=params)
+            if resp.status_code >= 400:
+                return []
+
+        rows = (data or {}).get("output2") or []
+        one_min: List[SimpleBar] = []
+        kst = ZoneInfo("Asia/Seoul")
+
+        for row in rows:
+            dt = str(row.get("stck_bsop_date", "") or "")
+            tm = str(row.get("stck_cntg_hour", "") or "").zfill(6)
+            if len(dt) != 8 or len(tm) != 6:
+                continue
+            try:
+                ts = datetime.strptime(f"{dt}{tm}", "%Y%m%d%H%M%S").replace(tzinfo=kst).astimezone(timezone.utc)
+            except Exception:
+                continue
+
+            o = float(row.get("stck_oprc", 0) or row.get("stck_prpr", 0) or 0)
+            h = float(row.get("stck_hgpr", 0) or row.get("stck_prpr", 0) or 0)
+            l = float(row.get("stck_lwpr", 0) or row.get("stck_prpr", 0) or 0)
+            c = float(row.get("stck_prpr", 0) or 0)
+            v = float(row.get("cntg_vol", 0) or 0)
+            if c <= 0:
+                continue
+            one_min.append(SimpleBar(timestamp=ts, open=o, high=h, low=l, close=c, volume=v))
+
+        if not one_min:
+            return []
+
+        one_min.sort(key=lambda b: b.timestamp)
+        if bucket_min == 1:
+            return one_min[-safe_limit:]
+
+        # Aggregate to N-minute buckets.
+        agg: List[SimpleBar] = []
+        cur_start = None
+        cur = None
+
+        for b in one_min:
+            ts_kst = b.timestamp.astimezone(kst)
+            minute_floor = (ts_kst.minute // bucket_min) * bucket_min
+            bucket_start_kst = ts_kst.replace(minute=minute_floor, second=0, microsecond=0)
+            bucket_start = bucket_start_kst.astimezone(timezone.utc)
+
+            if cur_start != bucket_start:
+                if cur is not None:
+                    agg.append(cur)
+                cur_start = bucket_start
+                cur = SimpleBar(
+                    timestamp=bucket_start,
+                    open=b.open,
+                    high=b.high,
+                    low=b.low,
+                    close=b.close,
+                    volume=b.volume,
+                )
+            else:
+                cur.high = max(cur.high, b.high)
+                cur.low = min(cur.low, b.low)
+                cur.close = b.close
+                cur.volume += b.volume
+
+        if cur is not None:
+            agg.append(cur)
+
+        return agg[-safe_limit:]
 
     async def get_portfolio_history(self, period: str = "1M", timeframe: str = "1D") -> PortfolioHistory:
         account = await self.get_account_info()

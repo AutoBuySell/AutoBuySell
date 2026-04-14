@@ -1,4 +1,4 @@
-from typing import Protocol, List, Optional
+from typing import Protocol, List, Optional, Any
 from datetime import datetime
 from pydantic import BaseModel
 
@@ -89,6 +89,12 @@ class BrokerAdapter(Protocol):
 
     async def get_market_status(self) -> bool:
         """Return True if the market is currently open."""
+        ...
+
+    async def get_historicals(
+        self, symbol: str, timeframe: str, limit: int
+    ) -> List[Any]:
+        """Fetch historical bars for strategy processing."""
         ...
 
     async def get_portfolio_history(
