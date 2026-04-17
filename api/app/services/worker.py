@@ -11,6 +11,7 @@ import logging
 import random
 import traceback
 from copy import deepcopy
+from zoneinfo import ZoneInfo
 
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy import select, desc
@@ -551,6 +552,19 @@ class AccountWorker:
                 required_limit=limit,
             )
 
+            candles, has_gap = self._continuous_tail(
+                candles=candles,
+                timeframe=strategy.timeframe,
+                required_limit=limit,
+            )
+
+            if len(candles) < limit:
+                logger.warning(
+                    f"[{self.account_name}] Insufficient continuous candles for {ticker}: "
+                    f"have={len(candles)} need={limit} gap_detected={has_gap}"
+                )
+                return
+
             if len(candles) < 2:
                 return
 
@@ -711,6 +725,70 @@ class AccountWorker:
 
         merged = sorted(by_ts.values(), key=lambda c: c.timestamp)
         return merged[-required_limit:]
+
+    def _timeframe_seconds(self, timeframe: str) -> int | None:
+        tf = (timeframe or "").lower().strip()
+        return {
+            "1min": 60,
+            "1m": 60,
+            "5min": 300,
+            "5m": 300,
+            "15min": 900,
+            "15m": 900,
+            "30min": 1800,
+            "30m": 1800,
+            "1hour": 3600,
+            "1h": 3600,
+            "1day": 86400,
+            "1d": 86400,
+        }.get(tf)
+
+    def _continuous_tail(
+        self,
+        candles: List[Candle],
+        timeframe: str,
+        required_limit: int,
+    ) -> tuple[List[Candle], bool]:
+        if not candles:
+            return candles, False
+
+        ordered = sorted(candles, key=lambda c: c.timestamp)
+        if len(ordered) <= 1:
+            return ordered, False
+
+        step = self._timeframe_seconds(timeframe)
+        if not step:
+            return ordered[-required_limit:], False
+
+        kst = ZoneInfo("Asia/Seoul")
+        contiguous_rev: List[Candle] = [ordered[-1]]
+        gap_detected = False
+
+        for i in range(len(ordered) - 2, -1, -1):
+            newer = contiguous_rev[-1]
+            prev = ordered[i]
+
+            delta = (newer.timestamp - prev.timestamp).total_seconds()
+            if delta <= 0:
+                continue
+
+            same_day = (
+                prev.timestamp.astimezone(kst).date()
+                == newer.timestamp.astimezone(kst).date()
+            )
+
+            # Intra-day gap detection: if one or more expected bars are missing,
+            # stop and use the latest continuous segment only.
+            if same_day and delta > (step * 1.5):
+                gap_detected = True
+                break
+
+            contiguous_rev.append(prev)
+            if len(contiguous_rev) >= required_limit:
+                break
+
+        contiguous = list(reversed(contiguous_rev))
+        return contiguous[-required_limit:], gap_detected
 
     async def _persist_runtime_candles(
         self, db: AsyncSession, candles: List[Candle], broker_source: str
