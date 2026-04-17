@@ -89,7 +89,11 @@ class KISBroker(BrokerAdapter):
         self._token_lock = asyncio.Lock()
         self._request_lock = asyncio.Lock()
         self._last_request_at: Optional[datetime] = None
-        self._min_request_interval_sec = 0.35
+        # KIS guidance is stricter on paper accounts; keep conservative defaults.
+        self._min_request_interval_sec = (
+            0.5 if self.is_paper else 0.1
+        )
+        self._request_jitter_sec = 0.03
 
     async def get_name(self) -> str:
         return "KIS OpenAPI (US)"
@@ -170,32 +174,44 @@ class KISBroker(BrokerAdapter):
         last_resp = None
         last_data = {}
         for i in range(attempts):
-            async with self._request_lock:
-                if self._last_request_at is not None:
-                    elapsed = (
-                        datetime.now(timezone.utc) - self._last_request_at
-                    ).total_seconds()
-                    if elapsed < self._min_request_interval_sec:
-                        await asyncio.sleep(self._min_request_interval_sec - elapsed)
-                resp = await client.request(
-                    method, url, headers=headers, params=params, json=json
-                )
-                self._last_request_at = datetime.now(timezone.utc)
+            try:
+                async with self._request_lock:
+                    if self._last_request_at is not None:
+                        elapsed = (
+                            datetime.now(timezone.utc) - self._last_request_at
+                        ).total_seconds()
+                        if elapsed < self._min_request_interval_sec:
+                            await asyncio.sleep(
+                                (self._min_request_interval_sec - elapsed)
+                                + random.uniform(0.0, self._request_jitter_sec)
+                            )
+                    resp = await client.request(
+                        method, url, headers=headers, params=params, json=json
+                    )
+                    self._last_request_at = datetime.now(timezone.utc)
+            except (httpx.TransportError, httpx.ReadTimeout, httpx.ConnectTimeout):
+                if i < attempts - 1:
+                    await asyncio.sleep((0.4 * (i + 1)) + random.uniform(0.05, 0.25))
+                    continue
+                raise
 
             data = resp.json() if resp.text else {}
             last_resp, last_data = resp, data
 
             throttled = (
                 isinstance(data, dict)
-                and str(data.get("message", "")) in {"EGW00201", "EGW00133"}
+                and (
+                    str(data.get("message", "")) in {"EGW00201", "EGW00133"}
+                    or str(data.get("msg_cd", "")) in {"EGW00201", "EGW00133"}
+                )
             ) or (
                 isinstance(data, dict)
                 and "초당 거래건수를 초과" in str(data.get("msg1", ""))
-            )
+            ) or resp.status_code == 429
             transient_5xx = resp.status_code >= 500
 
             if (throttled or transient_5xx) and i < attempts - 1:
-                await asyncio.sleep(1.2 * (i + 1))
+                await asyncio.sleep((1.1 * (i + 1)) + random.uniform(0.05, 0.25))
                 continue
             return resp, data
 
