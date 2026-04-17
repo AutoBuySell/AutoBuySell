@@ -1,5 +1,8 @@
 from typing import List, Any, Optional
 from datetime import datetime, timezone
+import asyncio
+import random
+import logging
 import httpx
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest
@@ -11,6 +14,9 @@ from app.brokers.base import (
     OrderRequest,
     OrderResult,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 class AlpacaBroker(BrokerAdapter):
@@ -39,6 +45,54 @@ class AlpacaBroker(BrokerAdapter):
             secret_key=self._secret_key,
             paper=self._is_paper,
         )
+
+        # Conservative defaults to avoid bursty request failures.
+        self._request_lock = asyncio.Lock()
+        self._last_request_at: Optional[datetime] = None
+        default_min_interval = 0.45 if self._is_paper else 0.35
+        self._min_request_interval_sec = float(
+            config.get("min_request_interval_sec", default_min_interval)
+        )
+
+    async def _respect_rate_limit(self):
+        async with self._request_lock:
+            if self._last_request_at is not None:
+                elapsed = (
+                    datetime.now(timezone.utc) - self._last_request_at
+                ).total_seconds()
+                if elapsed < self._min_request_interval_sec:
+                    jitter = random.uniform(0.01, 0.08)
+                    await asyncio.sleep(
+                        (self._min_request_interval_sec - elapsed) + jitter
+                    )
+            self._last_request_at = datetime.now(timezone.utc)
+
+    async def _http_get_with_retry(
+        self,
+        client: httpx.AsyncClient,
+        url: str,
+        headers: dict,
+        params: Optional[dict] = None,
+        attempts: int = 4,
+    ) -> httpx.Response:
+        last_exc: Optional[Exception] = None
+        for i in range(attempts):
+            try:
+                await self._respect_rate_limit()
+                resp = await client.get(url, headers=headers, params=params)
+                if resp.status_code in {429, 500, 502, 503, 504} and i < attempts - 1:
+                    await asyncio.sleep((0.35 * (2**i)) + random.uniform(0.05, 0.2))
+                    continue
+                return resp
+            except (httpx.TransportError, httpx.ReadTimeout, httpx.ConnectTimeout) as e:
+                last_exc = e
+                if i < attempts - 1:
+                    await asyncio.sleep((0.35 * (2**i)) + random.uniform(0.05, 0.2))
+                    continue
+                raise
+        if last_exc:
+            raise last_exc
+        raise RuntimeError("Alpaca HTTP request failed")
 
     async def get_name(self) -> str:
         return "Alpaca (alpaca-py)"
@@ -198,11 +252,25 @@ class AlpacaBroker(BrokerAdapter):
             limit=limit,
         )
 
-        bars_map = client.get_stock_bars(req)
-        try:
-            bars = list(bars_map[symbol])
-        except Exception:
-            bars = []
+        bars: List[Any] = []
+        last_err: Optional[Exception] = None
+        for i in range(4):
+            try:
+                await self._respect_rate_limit()
+                bars_map = await asyncio.to_thread(client.get_stock_bars, req)
+                bars = list(bars_map[symbol]) if bars_map else []
+                break
+            except Exception as e:
+                last_err = e
+                if i < 3:
+                    await asyncio.sleep((0.3 * (2**i)) + random.uniform(0.05, 0.2))
+                    continue
+                logger.warning(
+                    "Alpaca historical fetch failed for %s after retries: %s",
+                    symbol,
+                    e,
+                )
+                return []
 
         # DESC(latest first) -> ASC(oldest first) for downstream strategy compatibility
         return list(reversed(bars))
@@ -260,10 +328,18 @@ class AlpacaBroker(BrokerAdapter):
                     if page_token:
                         params["page_token"] = page_token
 
-                    resp = await client.get(url, headers=headers, params=params)
+                    resp = await self._http_get_with_retry(
+                        client=client,
+                        url=url,
+                        headers=headers,
+                        params=params,
+                        attempts=4,
+                    )
                     if resp.status_code >= 400:
-                        print(
-                            f"Error fetching trade fills via REST: {resp.status_code} {resp.text[:200]}"
+                        logger.warning(
+                            "Error fetching Alpaca trade fills via REST: %s %s",
+                            resp.status_code,
+                            (resp.text or "")[:200],
                         )
                         break
 
@@ -282,7 +358,7 @@ class AlpacaBroker(BrokerAdapter):
 
                 activities = activities[:limit]
         except Exception as e:
-            print(f"Error fetching trade fills via REST: {e}")
+            logger.warning("Error fetching Alpaca trade fills via REST: %s", e)
             return []
 
         fills = []

@@ -8,7 +8,9 @@ from uuid import UUID
 import asyncio
 import hashlib
 import logging
+import random
 import traceback
+from copy import deepcopy
 
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy import select
@@ -69,6 +71,34 @@ class AccountWorker:
         self.start_point_ts: dict[str, datetime] = {}
         self.last_processed_bar_ts: dict[str, datetime] = {}
         self._startup_jitter_applied = False
+
+    def _symbol_parallelism(self) -> int:
+        """Account-scoped symbol processing concurrency (rate-limit aware)."""
+        configured = self.account_config.get("symbol_parallelism")
+        if isinstance(configured, int) and configured > 0:
+            return min(configured, 8)
+
+        broker_name = self.broker.__class__.__name__.lower()
+        if "alpaca" in broker_name:
+            return 2
+        if "kis" in broker_name:
+            return 1
+        return 1
+
+    async def _process_symbol_isolated(
+        self,
+        ticker: str,
+        strategy_template,
+        current_params: dict,
+        account: AccountInfo,
+        sem: asyncio.Semaphore,
+    ):
+        async with sem:
+            await asyncio.sleep(random.uniform(0.0, 0.12))
+            strategy = deepcopy(strategy_template)
+            await strategy.initialize(current_params)
+            async with AsyncSessionLocal() as db:
+                await self._process_symbol(db, ticker, strategy, account)
 
     # ── State persistence ──────────────────────────────────────────
 
@@ -179,7 +209,7 @@ class AccountWorker:
                         return
 
                 strategy_name = self.active_strategy_name
-                strategy = self.strategies.get(strategy_name)
+                strategy_template = self.strategies.get(strategy_name)
 
                 default_res = await db.execute(
                     select(StrategyParam)
@@ -215,10 +245,30 @@ class AccountWorker:
                 )
                 overrides = {p.symbol: p.params for p in overrides_res.scalars().all()}
 
-                for ticker in symbols:
-                    current_params = overrides.get(ticker, default_param.params)
-                    await strategy.initialize(current_params)
-                    await self._process_symbol(db, ticker, strategy, account)
+                symbol_parallelism = self._symbol_parallelism()
+                if symbol_parallelism <= 1:
+                    for ticker in symbols:
+                        current_params = overrides.get(ticker, default_param.params)
+                        strategy = deepcopy(strategy_template)
+                        await strategy.initialize(current_params)
+                        await self._process_symbol(db, ticker, strategy, account)
+                else:
+                    sem = asyncio.Semaphore(symbol_parallelism)
+                    tasks = []
+                    for ticker in symbols:
+                        current_params = overrides.get(ticker, default_param.params)
+                        tasks.append(
+                            asyncio.create_task(
+                                self._process_symbol_isolated(
+                                    ticker=ticker,
+                                    strategy_template=strategy_template,
+                                    current_params=current_params,
+                                    account=account,
+                                    sem=sem,
+                                )
+                            )
+                        )
+                    await asyncio.gather(*tasks)
 
             except Exception as e:
                 logger.error(f"[{self.account_name}] Cycle error: {e}")
