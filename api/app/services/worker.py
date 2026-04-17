@@ -13,7 +13,7 @@ import traceback
 from copy import deepcopy
 
 from fastapi.encoders import jsonable_encoder
-from sqlalchemy import select
+from sqlalchemy import select, desc
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -542,6 +542,18 @@ class AccountWorker:
             await self._persist_runtime_candles(db, candles, broker_source)
             await db.commit()
 
+            candles = await self._hydrate_candles_with_history(
+                db=db,
+                candles=candles,
+                symbol=ticker,
+                timeframe=strategy.timeframe,
+                broker_source=broker_source,
+                required_limit=limit,
+            )
+
+            if len(candles) < 2:
+                return
+
             current_bar_ts = candles[-1].timestamp
             last_bar_ts = self.last_processed_bar_ts.get(ticker)
             if last_bar_ts and current_bar_ts <= last_bar_ts:
@@ -630,6 +642,75 @@ class AccountWorker:
         )
         position = result.scalar_one_or_none()
         return position.qty if position else 0.0
+
+    async def _hydrate_candles_with_history(
+        self,
+        db: AsyncSession,
+        candles: List[Candle],
+        symbol: str,
+        timeframe: str,
+        broker_source: str,
+        required_limit: int,
+    ) -> List[Candle]:
+        if not candles:
+            return candles
+
+        by_ts = {c.timestamp: c for c in candles}
+        if len(by_ts) >= required_limit:
+            return sorted(by_ts.values(), key=lambda c: c.timestamp)[-required_limit:]
+
+        fetch_n = max(required_limit * 4, required_limit + 50)
+
+        runtime_rows = (
+            (
+                await db.execute(
+                    select(RuntimeCandle)
+                    .where(
+                        RuntimeCandle.symbol == symbol,
+                        RuntimeCandle.timeframe == timeframe,
+                        RuntimeCandle.broker_source == broker_source,
+                    )
+                    .order_by(desc(RuntimeCandle.timestamp))
+                    .limit(fetch_n)
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+        for r in runtime_rows:
+            if r.timestamp in by_ts:
+                continue
+            by_ts[r.timestamp] = Candle(
+                symbol=symbol,
+                timeframe=timeframe,
+                timestamp=r.timestamp,
+                open=float(r.open),
+                high=float(r.high),
+                low=float(r.low),
+                close=float(r.close),
+                volume=float(r.volume),
+            )
+
+        if len(by_ts) < required_limit:
+            hist_rows = (
+                (
+                    await db.execute(
+                        select(Candle)
+                        .where(Candle.symbol == symbol, Candle.timeframe == timeframe)
+                        .order_by(desc(Candle.timestamp))
+                        .limit(fetch_n)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            for h in hist_rows:
+                if h.timestamp not in by_ts:
+                    by_ts[h.timestamp] = h
+
+        merged = sorted(by_ts.values(), key=lambda c: c.timestamp)
+        return merged[-required_limit:]
 
     async def _persist_runtime_candles(
         self, db: AsyncSession, candles: List[Candle], broker_source: str
