@@ -560,10 +560,9 @@ class AccountWorker:
 
             if len(candles) < limit:
                 logger.warning(
-                    f"[{self.account_name}] Insufficient continuous candles for {ticker}: "
+                    f"[{self.account_name}] Using partial continuous candles for {ticker}: "
                     f"have={len(candles)} need={limit} gap_detected={has_gap}"
                 )
-                return
 
             if len(candles) < 2:
                 return
@@ -772,6 +771,8 @@ class AccountWorker:
             if delta <= 0:
                 continue
 
+            prev_kst = prev.timestamp.astimezone(kst)
+            newer_kst = newer.timestamp.astimezone(kst)
             same_day = (
                 prev.timestamp.astimezone(kst).date()
                 == newer.timestamp.astimezone(kst).date()
@@ -779,9 +780,16 @@ class AccountWorker:
 
             # Intra-day gap detection: if one or more expected bars are missing,
             # stop and use the latest continuous segment only.
-            if same_day and delta > (step * 1.5):
-                gap_detected = True
-                break
+            if same_day:
+                if delta > (step * 1.5):
+                    gap_detected = True
+                    break
+            else:
+                # Inter-day boundary handling (weekend/holiday-friendly):
+                # allow only close->next open style transitions.
+                if not self._is_allowed_session_boundary(prev_kst, newer_kst):
+                    gap_detected = True
+                    break
 
             contiguous_rev.append(prev)
             if len(contiguous_rev) >= required_limit:
@@ -789,6 +797,29 @@ class AccountWorker:
 
         contiguous = list(reversed(contiguous_rev))
         return contiguous[-required_limit:], gap_detected
+
+    def _is_allowed_session_boundary(self, prev_kst: datetime, newer_kst: datetime) -> bool:
+        # If timestamps go backwards or equal, reject.
+        if newer_kst <= prev_kst:
+            return False
+
+        # Strategy currently uses 30m bars for KR. Accept day boundary only when
+        # previous candle is at/near close and next candle is at/near open.
+        prev_hm = (prev_kst.hour, prev_kst.minute)
+        newer_hm = (newer_kst.hour, newer_kst.minute)
+
+        prev_is_close_side = prev_hm in {(15, 0), (15, 30)}
+        newer_is_open_side = newer_hm in {(9, 0), (9, 30)}
+
+        if prev_is_close_side and newer_is_open_side:
+            return True
+
+        # Allow noon-break continuation in KRX session shape.
+        noon_break_boundary = prev_hm == (11, 30) and newer_hm == (12, 30)
+        if noon_break_boundary:
+            return True
+
+        return False
 
     async def _persist_runtime_candles(
         self, db: AsyncSession, candles: List[Candle], broker_source: str
