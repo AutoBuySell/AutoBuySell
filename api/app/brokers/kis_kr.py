@@ -434,24 +434,47 @@ class KISKRBroker(BrokerAdapter):
             return []
 
         # KIS KR intraday endpoint (1-minute feed). Aggregate to requested timeframe.
-        url = f"{self.base_url}/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice"
-        headers = await self._headers("FHKST03010200")
-        params = {
-            "FID_ETC_CLS_CODE": "",
-            "FID_COND_MRKT_DIV_CODE": "J",
-            "FID_INPUT_ISCD": symbol,
-            "FID_INPUT_HOUR_1": "",
-            "FID_PW_DATA_INCU_YN": "Y",
-        }
-
+        # Prefer daily intraday endpoint that can include prior-day minutes.
+        now_kst = datetime.now(ZoneInfo("Asia/Seoul"))
+        rows = []
         async with httpx.AsyncClient(timeout=20.0) as client:
-            resp, data = await self._request_with_retry(client, "GET", url, headers=headers, params=params)
-            if resp.status_code >= 400:
-                return []
+            daily_url = f"{self.base_url}/uapi/domestic-stock/v1/quotations/inquire-time-dailychartprice"
+            daily_headers = await self._headers("FHKST03010230")
+            daily_params = {
+                "FID_COND_MRKT_DIV_CODE": "J",
+                "FID_INPUT_ISCD": symbol,
+                "FID_INPUT_HOUR_1": now_kst.strftime("%H%M%S"),
+                "FID_INPUT_DATE_1": now_kst.strftime("%Y%m%d"),
+                "FID_PW_DATA_INCU_YN": "Y",
+                "FID_FAKE_TICK_INCU_YN": "",
+            }
+            resp, data = await self._request_with_retry(
+                client, "GET", daily_url, headers=daily_headers, params=daily_params
+            )
+            if resp.status_code < 400:
+                rows = (data or {}).get("output2") or []
 
-        rows = (data or {}).get("output2") or []
+            # Fallback: today's intraday endpoint when daily endpoint returns empty.
+            if not rows:
+                item_url = f"{self.base_url}/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice"
+                item_headers = await self._headers("FHKST03010200")
+                item_params = {
+                    "FID_ETC_CLS_CODE": "",
+                    "FID_COND_MRKT_DIV_CODE": "J",
+                    "FID_INPUT_ISCD": symbol,
+                    "FID_INPUT_HOUR_1": now_kst.strftime("%H%M%S"),
+                    "FID_PW_DATA_INCU_YN": "Y",
+                }
+                item_resp, item_data = await self._request_with_retry(
+                    client, "GET", item_url, headers=item_headers, params=item_params
+                )
+                if item_resp.status_code >= 400:
+                    return []
+                rows = (item_data or {}).get("output2") or []
+
         one_min: List[SimpleBar] = []
         kst = ZoneInfo("Asia/Seoul")
+        seen_ts: set[datetime] = set()
 
         for row in rows:
             dt = str(row.get("stck_bsop_date", "") or "")
@@ -470,6 +493,9 @@ class KISKRBroker(BrokerAdapter):
             v = float(row.get("cntg_vol", 0) or 0)
             if c <= 0:
                 continue
+            if ts in seen_ts:
+                continue
+            seen_ts.add(ts)
             one_min.append(SimpleBar(timestamp=ts, open=o, high=h, low=l, close=c, volume=v))
 
         if not one_min:
