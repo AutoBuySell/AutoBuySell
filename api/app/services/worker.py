@@ -79,6 +79,8 @@ class AccountWorker:
             return min(configured, 8)
 
         broker_name = self.broker.__class__.__name__.lower()
+        if "kis_kr" in broker_name or "kiskr" in broker_name:
+            return 2
         if "alpaca" in broker_name:
             return 2
         if "kis" in broker_name:
@@ -246,6 +248,9 @@ class AccountWorker:
                 overrides = {p.symbol: p.params for p in overrides_res.scalars().all()}
 
                 symbol_parallelism = self._symbol_parallelism()
+                logger.info(
+                    f"[{self.account_name}] Symbol processing parallelism={symbol_parallelism} (symbols={len(symbols)})"
+                )
                 if symbol_parallelism <= 1:
                     for ticker in symbols:
                         current_params = overrides.get(ticker, default_param.params)
