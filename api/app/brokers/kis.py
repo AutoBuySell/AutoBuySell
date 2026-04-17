@@ -95,6 +95,9 @@ class KISBroker(BrokerAdapter):
         )
         self._request_jitter_sec = 0.03
 
+        self._market_status_cache: Optional[bool] = None
+        self._market_status_cached_at: Optional[datetime] = None
+
     async def get_name(self) -> str:
         return "KIS OpenAPI (US)"
 
@@ -540,6 +543,24 @@ class KISBroker(BrokerAdapter):
         if not (regular_open <= now_et.time() <= regular_close):
             return False
 
+        if (
+            self._market_status_cached_at
+            and self._market_status_cache is not None
+            and (datetime.now(timezone.utc) - self._market_status_cached_at).total_seconds() < 120
+        ):
+            return self._market_status_cache
+
+        # Holiday/session probe: latest intraday bar should belong to today (ET).
+        probe_open = True
+        try:
+            probe_open = await self._probe_session_has_today_bar(now_et)
+        except Exception:
+            probe_open = True
+        if not probe_open:
+            self._market_status_cache = False
+            self._market_status_cached_at = datetime.now(timezone.utc)
+            return False
+
         # 2) Indirect check: quote endpoint should respond during tradable window
         try:
             _ = await self._fetch_us_price("AAPL")
@@ -552,7 +573,16 @@ class KISBroker(BrokerAdapter):
             if age.total_seconds() < 180:
                 return False
 
+        self._market_status_cache = True
+        self._market_status_cached_at = datetime.now(timezone.utc)
         return True
+
+    async def _probe_session_has_today_bar(self, now_et: datetime) -> bool:
+        bars = await self.get_historicals("AAPL", "30Min", 2)
+        if not bars:
+            return False
+        latest_et = bars[-1].timestamp.astimezone(ZoneInfo("America/New_York"))
+        return latest_et.date() == now_et.date()
 
     async def get_historicals(
         self, symbol: str, timeframe: str, limit: int

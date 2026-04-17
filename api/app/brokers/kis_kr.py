@@ -65,6 +65,9 @@ class KISKRBroker(BrokerAdapter):
         self._min_request_interval_sec = 0.5 if self.is_paper else 0.1
         self._request_jitter_sec = 0.03
 
+        self._market_status_cache: Optional[bool] = None
+        self._market_status_cached_at: Optional[datetime] = None
+
     async def get_name(self) -> str:
         return "KIS OpenAPI (KR)"
 
@@ -360,7 +363,57 @@ class KISKRBroker(BrokerAdapter):
         now_kst = datetime.now(timezone.utc).astimezone(ZoneInfo("Asia/Seoul"))
         if now_kst.weekday() >= 5:
             return False
-        return dtime(9, 0) <= now_kst.time() <= dtime(15, 30)
+        if not (dtime(9, 0) <= now_kst.time() <= dtime(15, 30)):
+            return False
+
+        # Short TTL cache to avoid frequent extra probes.
+        if (
+            self._market_status_cached_at
+            and self._market_status_cache is not None
+            and (datetime.now(timezone.utc) - self._market_status_cached_at).total_seconds() < 120
+        ):
+            return self._market_status_cache
+
+        is_open = True
+        try:
+            is_open = await self._probe_session_has_today_bar(now_kst)
+        except Exception:
+            # Keep time-rule open on transient probe failure.
+            is_open = True
+
+        self._market_status_cache = is_open
+        self._market_status_cached_at = datetime.now(timezone.utc)
+        return is_open
+
+    async def _probe_session_has_today_bar(self, now_kst: datetime) -> bool:
+        """Holiday/closure-aware probe: verify intraday rows include today's date."""
+        url = f"{self.base_url}/uapi/domestic-stock/v1/quotations/inquire-time-dailychartprice"
+        headers = await self._headers("FHKST03010230")
+        params = {
+            "FID_COND_MRKT_DIV_CODE": "J",
+            "FID_INPUT_ISCD": "005930",  # stable liquid probe symbol
+            "FID_INPUT_HOUR_1": now_kst.strftime("%H%M%S"),
+            "FID_INPUT_DATE_1": now_kst.strftime("%Y%m%d"),
+            "FID_PW_DATA_INCU_YN": "Y",
+            "FID_FAKE_TICK_INCU_YN": "",
+        }
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp, data = await self._request_with_retry(
+                client, "GET", url, headers=headers, params=params, attempts=2
+            )
+            if resp.status_code >= 400:
+                return True
+
+        rows = (data or {}).get("output2") or []
+        if not rows:
+            return False
+
+        today = now_kst.strftime("%Y%m%d")
+        # Accept if any of first few rows belong to today.
+        for row in rows[:5]:
+            if str(row.get("stck_bsop_date", "")) == today:
+                return True
+        return False
 
     async def get_historicals(self, symbol: str, timeframe: str, limit: int) -> List[Any]:
         """
